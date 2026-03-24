@@ -3,6 +3,7 @@ session.py — v2: Điều phối RecordingSession với hỗ trợ chọn màn 
 """
 import logging
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
@@ -13,6 +14,12 @@ from .audio_engine import AudioEngine, OUTPUT_DIR
 from .video_engine import VideoEngine
 
 logger = logging.getLogger(__name__)
+
+# Ẩn cửa sổ console khi gọi FFmpeg trên Windows
+_POPEN_FLAGS: dict = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW}
+    if sys.platform == "win32" else {}
+)
 
 
 def _emit(event: str, data: dict) -> None:
@@ -117,7 +124,7 @@ def _concat_video_segments(ffmpeg: str, session_id: str, paths: list[str]) -> st
             ffmpeg, "-y", "-f", "concat", "-safe", "0",
             "-i", str(list_file), "-c", "copy", out_path,
         ]
-        proc = subprocess.run(cmd, capture_output=True)
+        proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
         if proc.returncode != 0:
             logger.error(
                 "[PostProcess] concat lỗi:\n%s", proc.stderr.decode(errors="replace")
@@ -226,7 +233,7 @@ def _post_process(
 
         _emit("job_progress", {"job_id": session_id, "stage": "merging",
                                 "message": "FFmpeg đang ghép...", "percent": 30})
-        proc = subprocess.run(cmd, capture_output=True)
+        proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
         if proc.returncode == 0:
             result["merged"] = merged_path
             _emit("job_progress", {"job_id": session_id, "stage": "merging",
@@ -258,7 +265,7 @@ def _post_process(
             cmd_mp3 += ["-filter_complex", f"[0:a]volume={spk_vol}[a]", "-map", "[a]"]
 
         cmd_mp3 += ["-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", mp3_path]
-        proc_mp3 = subprocess.run(cmd_mp3, capture_output=True)
+        proc_mp3 = subprocess.run(cmd_mp3, capture_output=True, **_POPEN_FLAGS)
         if proc_mp3.returncode == 0:
             result["audio_mp3"] = mp3_path
             _emit("job_progress", {"job_id": session_id, "stage": "converting",

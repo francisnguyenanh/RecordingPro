@@ -294,6 +294,8 @@ def api_merge_files():
     job_id = f"manual_merge_{int(time.monotonic() * 1000)}"
 
     def _do_merge():
+        import sys as _sys
+        _flags = {"creationflags": _sp.CREATE_NO_WINDOW} if _sys.platform == "win32" else {}
         from recorder.session import _find_ffmpeg
         try:
             ffmpeg = _find_ffmpeg()
@@ -330,7 +332,7 @@ def api_merge_files():
             out_path,
         ]
 
-        proc = _sp.run(cmd, capture_output=True)
+        proc = _sp.run(cmd, capture_output=True, **_flags)
         if proc.returncode == 0:
             socketio.emit("job_progress", {
                 "job_id": job_id, "stage": "done",
