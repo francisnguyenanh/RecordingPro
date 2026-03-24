@@ -1,0 +1,511 @@
+"""
+app.py — ScreenCapturePro v2
+Flask backend: Config, CallDetector, DisplayManager, Multi-display recording.
+"""
+import json
+import logging
+import os
+import threading
+import time
+from pathlib import Path
+from typing import Literal, Optional
+
+from flask import Flask, jsonify, render_template, request, send_file
+from flask_socketio import SocketIO
+
+# ── Logging ───────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── Flask + SocketIO ──────────────────────────────────────────────────
+app = Flask(__name__)
+app.config["SECRET_KEY"] = "screencapturepro-v2-secret"
+socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
+
+# ── Paths ─────────────────────────────────────────────────────────────
+OUTPUT_DIR = Path.home() / "Videos" / "ScreenCapturePro"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_PATH = Path(__file__).parent / "config.json"
+
+# ── Default config ────────────────────────────────────────────────────
+DEFAULT_CONFIG: dict = {
+    "default_display_index": 1,
+    "auto_detect_calls": False,
+    "auto_record_delay_seconds": 5,
+    "auto_stop_on_call_end": True,
+    "merge_audio_default": True,
+    "convert_mp3_default": True,
+    "mic_gain": 1,
+    "speaker_gain": 1,
+    "output_dir": None,
+}
+
+# ══════════════════════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════════════════════
+
+def load_config() -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    if CONFIG_PATH.exists():
+        try:
+            with CONFIG_PATH.open() as f:
+                saved = json.load(f)
+            cfg.update(saved)
+        except Exception as exc:
+            logger.warning("[Config] Không đọc được config.json: %s", exc)
+    return cfg
+
+
+def save_config(updates: dict) -> None:
+    cfg = load_config()
+    cfg.update(updates)
+    try:
+        with CONFIG_PATH.open("w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        logger.error("[Config] Không ghi được config.json: %s", exc)
+
+
+# ── Global state (thread-safe) ────────────────────────────────────────
+_state_lock = threading.Lock()
+current_session: Optional[object] = None
+app_state: Literal["idle", "recording", "processing"] = "idle"
+_recording_start_time: float = 0.0
+popup_pending: bool = False    # Đang hiển thị modal hỏi người dùng
+
+# ── CallDetector & DisplayManager singletons ─────────────────────────
+from recorder.call_detector import CallDetector
+from recorder.display_manager import DisplayManager
+
+_display_manager = DisplayManager()
+_detector: Optional[CallDetector] = None
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CALL DETECTOR CALLBACKS
+# ══════════════════════════════════════════════════════════════════════
+
+def _on_call_start(app_name: str) -> None:
+    global popup_pending
+    with _state_lock:
+        if popup_pending:
+            logger.debug("[Detector] Popup đang mở, bỏ qua sự kiện trùng lặp.")
+            return
+        popup_pending = True
+    logger.info("[Detector] Phát hiện cuộc gọi: %s → emit call_detected", app_name)
+    socketio.emit("call_detected", {"app_name": app_name})
+
+
+def _on_call_end(app_name: str) -> None:
+    global popup_pending
+    with _state_lock:
+        pending = popup_pending
+        state = app_state
+        popup_pending = False
+
+    if pending:
+        # Popup chưa được trả lời → tự đóng
+        socketio.emit("call_popup_dismissed", {"reason": "call_ended_before_answer"})
+        logger.info("[Detector] Cuộc gọi kết thúc trước khi người dùng trả lời popup.")
+
+    if state == "recording":
+        socketio.emit("call_ended", {"app_name": app_name})
+        logger.info("[Detector] Cuộc gọi %s kết thúc trong khi đang ghi.", app_name)
+
+
+def _start_detector() -> None:
+    global _detector
+    if _detector is None:
+        _detector = CallDetector(
+            on_call_start=_on_call_start,
+            on_call_end=_on_call_end,
+        )
+    _detector.start_monitoring()
+
+
+def _stop_detector() -> None:
+    global _detector
+    if _detector is not None:
+        _detector.stop_monitoring()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Recording
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/")
+def index():
+    cfg = load_config()
+    return render_template("index.html", output_dir=str(OUTPUT_DIR), config=cfg)
+
+
+@app.route("/api/start", methods=["POST"])
+def api_start():
+    global current_session, app_state, _recording_start_time
+
+    with _state_lock:
+        if app_state != "idle":
+            return jsonify({"ok": False, "error": "Đang bận: " + app_state}), 409
+
+        data = request.get_json(silent=True) or {}
+        display_index = int(data.get("display_index", 1))
+
+        from recorder.session import RecordingSession
+        session = RecordingSession(display_index=display_index)
+        try:
+            session.start()
+        except Exception as exc:
+            logger.exception("[API/start] Lỗi bắt đầu session")
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        current_session = session
+        app_state = "recording"
+        _recording_start_time = time.monotonic()
+
+    socketio.start_background_task(_level_emitter)
+    _emit_status()
+    return jsonify({"ok": True, "session_id": session.session_id})
+
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    global current_session, app_state
+
+    with _state_lock:
+        if app_state != "recording" or current_session is None:
+            return jsonify({"ok": False, "error": "Không có phiên đang ghi."}), 409
+        session = current_session
+        app_state = "processing"
+
+    _emit_status()
+    data = request.get_json(silent=True) or {}
+    merge_audio = bool(data.get("merge_audio", True))
+    convert_mp3 = bool(data.get("convert_mp3", True))
+    mic_gain = max(0.1, float(data.get("mic_gain", 1)))
+    speaker_gain = max(0.1, float(data.get("speaker_gain", 1)))
+    job_id = session.session_id
+
+    def _do_stop():
+        global current_session, app_state
+        try:
+            session.stop(
+                merge_audio=merge_audio, convert_mp3=convert_mp3,
+                mic_gain=mic_gain, speaker_gain=speaker_gain,
+            )
+        except Exception as exc:
+            logger.exception("[API/stop] Lỗi hậu xử lý")
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "error",
+                "message": f"Lỗi: {exc}", "percent": 0,
+            })
+        finally:
+            with _state_lock:
+                current_session = None
+                app_state = "idle"
+            _emit_status()
+
+    socketio.start_background_task(_do_stop)
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    with _state_lock:
+        state = app_state
+        dur = int(time.monotonic() - _recording_start_time) if state == "recording" else 0
+        sid = current_session.session_id if current_session else None
+    return jsonify({"state": state, "duration_seconds": dur, "session_id": sid})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Files
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/files", methods=["GET"])
+def api_files():
+    files = []
+    for p in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.suffix.lower() not in (".mp4", ".mp3", ".wav"):
+            continue
+        stat = p.stat()
+        ext = p.suffix.lower()
+        ftype = "video" if ext == ".mp4" else ("audio" if ext == ".mp3" else "wav")
+        files.append({
+            "name": p.name,
+            "type": ftype,
+            "size_mb": round(stat.st_size / 1_048_576, 2),
+            "created_at": int(stat.st_mtime),
+            "download_url": f"/api/download/{p.name}",
+        })
+    return jsonify(files)
+
+
+@app.route("/api/download/<name>", methods=["GET"])
+def api_download(name: str):
+    path = OUTPUT_DIR / name
+    if not path.exists() or not path.is_file():
+        return jsonify({"error": "File không tồn tại."}), 404
+    return send_file(str(path), as_attachment=True)
+
+
+@app.route("/api/files/<name>", methods=["DELETE"])
+def api_delete(name: str):
+    path = OUTPUT_DIR / name
+    if not path.exists() or not path.is_file():
+        return jsonify({"error": "File không tồn tại."}), 404
+    path.unlink()
+    socketio.emit("files_updated", {})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/open-folder", methods=["POST"])
+def api_open_folder():
+    try:
+        import platform
+        if platform.system() == "Windows":
+            os.startfile(str(OUTPUT_DIR))
+        elif platform.system() == "Darwin":
+            import subprocess
+            subprocess.Popen(["open", str(OUTPUT_DIR)])
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", str(OUTPUT_DIR)])
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True, "path": str(OUTPUT_DIR)})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Config
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/config", methods=["GET"])
+def api_get_config():
+    return jsonify(load_config())
+
+
+@app.route("/api/config", methods=["POST"])
+def api_post_config():
+    updates = request.get_json(silent=True) or {}
+    save_config(updates)
+
+    # Áp dụng auto_detect ngay lập tức
+    if "auto_detect_calls" in updates:
+        if updates["auto_detect_calls"]:
+            _start_detector()
+        else:
+            _stop_detector()
+
+    return jsonify({"ok": True, "config": load_config()})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Displays
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/displays", methods=["GET"])
+def api_displays():
+    include_preview = request.args.get("preview", "false").lower() == "true"
+    displays = _display_manager.get_displays(include_preview=include_preview)
+    return jsonify([
+        {
+            "index": d.index,
+            "name": d.name,
+            "width": d.width,
+            "height": d.height,
+            "is_primary": d.is_primary,
+            "preview_b64": d.preview_b64 if include_preview else "",
+        }
+        for d in displays
+    ])
+
+
+@app.route("/api/displays/preview", methods=["GET"])
+def api_displays_preview():
+    displays = _display_manager.refresh_previews()
+    return jsonify([
+        {"index": d.index, "preview_b64": d.preview_b64}
+        for d in displays
+    ])
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Detector
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/detector/status", methods=["GET"])
+def api_detector_status():
+    if _detector is None:
+        return jsonify({
+            "monitoring": False, "active_call": None,
+            "last_result": None,
+        })
+    return jsonify(_detector.get_status())
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Simulate / Test
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/switch-display", methods=["POST"])
+def api_switch_display():
+    """Chuyển màn hình đang ghi ngay trong khi recording đang chạy."""
+    global current_session
+    with _state_lock:
+        if app_state != "recording" or current_session is None:
+            return jsonify({"ok": False, "error": "Không có phiên đang ghi."}), 409
+        data = request.get_json(silent=True) or {}
+        new_index = int(data.get("display_index", 1))
+        current_session.switch_display(new_index)
+
+    save_config({"default_display_index": new_index})
+    socketio.emit("display_switched", {"display_index": new_index})
+    return jsonify({"ok": True, "display_index": new_index})
+
+
+@app.route("/api/simulate/call-start", methods=["POST"])
+def api_simulate_call_start():
+    """
+    Trigger a fake call_detected event for UI testing.
+    Body: { "app_name": "Zoom" | "Microsoft Teams" | "Google Meet" }
+    Reuses same on_call_start callback → identical to real detection.
+    """
+    global _detector
+    data = request.get_json(silent=True) or {}
+    app_name = data.get("app_name", "Zoom")
+
+    # Ensure detector exists (create on-demand for simulate, even if monitoring off)
+    if _detector is None:
+        _detector = CallDetector(
+            on_call_start=_on_call_start,
+            on_call_end=_on_call_end,
+        )
+
+    ok = _detector.simulate_call_start(app_name)
+    if not ok:
+        return jsonify({"error": "Đang có cuộc gọi đang hoạt động"}), 409
+    return jsonify({"ok": True, "app_name": app_name})
+
+
+@app.route("/api/simulate/call-end", methods=["POST"])
+def api_simulate_call_end():
+    """
+    Trigger a fake call_ended event for UI testing.
+    Fires on_call_end callback → same as real detection.
+    """
+    global _detector
+    if _detector is None:
+        return jsonify({"error": "Không có cuộc gọi nào đang chạy"}), 409
+
+    ok = _detector.simulate_call_end()
+    if not ok:
+        return jsonify({"error": "Không có cuộc gọi nào đang chạy"}), 409
+    return jsonify({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SOCKETIO EVENTS
+# ══════════════════════════════════════════════════════════════════════
+
+@socketio.on("connect")
+def on_connect():
+    _emit_status()
+
+
+@socketio.on("confirm_record")
+def on_confirm_record():
+    """Client xác nhận muốn bắt đầu ghi sau khi phát hiện cuộc gọi."""
+    global popup_pending
+    with _state_lock:
+        popup_pending = False
+        state = app_state
+
+    if state != "idle":
+        logger.warning("[Socket] confirm_record nhận được nhưng app_state=%s", state)
+        return
+
+    cfg = load_config()
+    display_index = int(cfg.get("default_display_index", 1))
+
+    # Trigger start recording via internal call
+    from recorder.session import RecordingSession
+    _start_session(display_index=display_index)
+
+
+@socketio.on("dismiss_call_popup")
+def on_dismiss_call_popup():
+    global popup_pending
+    with _state_lock:
+        popup_pending = False
+    logger.info("[Socket] Người dùng bỏ qua popup cuộc gọi.")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# INTERNAL HELPERS
+# ══════════════════════════════════════════════════════════════════════
+
+def _start_session(display_index: int = 1) -> None:
+    global current_session, app_state, _recording_start_time
+    with _state_lock:
+        if app_state != "idle":
+            return
+        from recorder.session import RecordingSession
+        session = RecordingSession(display_index=display_index)
+        try:
+            session.start()
+        except Exception as exc:
+            logger.exception("[Internal] Lỗi bắt đầu session")
+            return
+        current_session = session
+        app_state = "recording"
+        _recording_start_time = time.monotonic()
+
+    socketio.start_background_task(_level_emitter)
+    _emit_status()
+
+
+def _emit_status() -> None:
+    with _state_lock:
+        state = app_state
+        dur = int(time.monotonic() - _recording_start_time) if state == "recording" else 0
+        sid = current_session.session_id if current_session else None
+    socketio.emit("status_update", {
+        "state": state,
+        "duration_seconds": dur,
+        "session_id": sid,
+    })
+
+
+def _level_emitter() -> None:
+    while True:
+        with _state_lock:
+            state = app_state
+            session = current_session
+        if state != "recording" or session is None:
+            break
+        mic_lv = getattr(getattr(session, "audio", None), "mic_level", 0.0)
+        spk_lv = getattr(getattr(session, "audio", None), "speaker_level", 0.0)
+        socketio.emit("level_update", {"mic": round(mic_lv, 3), "speaker": round(spk_lv, 3)})
+        socketio.sleep(0.1)
+    socketio.emit("level_update", {"mic": 0.0, "speaker": 0.0})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# STARTUP
+# ══════════════════════════════════════════════════════════════════════
+
+def _on_startup() -> None:
+    cfg = load_config()
+    if cfg.get("auto_detect_calls"):
+        logger.info("[Startup] auto_detect_calls=True → khởi động CallDetector")
+        _start_detector()
+    logger.info("[Startup] OUTPUT_DIR: %s", OUTPUT_DIR)
+
+
+if __name__ == "__main__":
+    _on_startup()
+    logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
+    socketio.run(app, host="127.0.0.1", port=5010, debug=True)

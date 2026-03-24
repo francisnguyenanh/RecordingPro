@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ScreenCapturePro v2 — Ghi màn hình chuyên nghiệp</title>
+  <meta name="description" content="Ghi màn hình + âm thanh, tự động phát hiện cuộc gọi, chọn màn hình." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+
+  <!-- ══ MODAL: Phát hiện cuộc gọi ══════════════════════════════════ -->
+  <div id="call-modal-overlay" class="modal-overlay hidden" onclick="handleOverlayClick(event)">
+    <div id="call-modal" class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-icon" id="modal-app-icon">📡</div>
+      <h2 class="modal-title" id="modal-title">Phát hiện cuộc gọi</h2>
+      <p class="modal-app-name" id="modal-app-name">—</p>
+      <p class="modal-question">Bạn có muốn bắt đầu ghi màn hình không?</p>
+      <div class="modal-display-hint">
+        <span class="modal-display-label">Màn hình: </span>
+        <span id="modal-display-name" class="modal-display-value">Display 1</span>
+        <button class="btn-link" onclick="dismissModal(); scrollToDisplaySelector()">Đổi</button>
+      </div>
+      <div class="modal-actions">
+        <button id="modal-confirm-record" class="modal-btn-confirm">⏺ Bắt đầu ghi</button>
+        <button id="modal-dismiss" class="modal-btn-dismiss">✕ Bỏ qua</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ TOAST: Cuộc gọi kết thúc ═══════════════════════════════════ -->
+  <div id="call-ended-toast" class="toast hidden">
+    <div class="toast-content">
+      <span id="toast-app-name" class="toast-appname">—</span>
+      <span class="toast-msg"> đã kết thúc. Dừng ghi?</span>
+    </div>
+    <div class="toast-actions">
+      <button id="toast-stop" class="btn-toast-stop">■ Dừng</button>
+      <button id="toast-continue" class="btn-toast-continue">▶ Tiếp tục</button>
+    </div>
+    <div id="toast-timer-bar" class="toast-timer-bar"></div>
+  </div>
+
+  <!-- ══ HEADER ══════════════════════════════════════════════════════ -->
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-icon">⬛</span>
+        <h1>ScreenCapturePro <span class="version-badge">v2</span></h1>
+      </div>
+      <div class="header-right">
+        <span id="status-dot" class="status-dot idle"></span>
+        <span id="status-label" class="status-label">SẴN SÀNG</span>
+        <label class="toggle-switch" title="Tự động phát hiện và hỏi ghi cuộc gọi">
+          <input type="checkbox" id="auto-detect-toggle" {% if config.auto_detect_calls %}checked{% endif %} />
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">Tự động</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══ MAIN ════════════════════════════════════════════════════════ -->
+  <main>
+
+    <!-- Display selector -->
+    <section id="display-selector" aria-label="Chọn màn hình ghi">
+      <h2 class="section-title">🖥 CHỌN MÀN HÌNH</h2>
+      <div id="display-grid" class="display-grid">
+        <div class="display-card-loading">Đang tải danh sách màn hình…</div>
+      </div>
+      <button id="refresh-previews" class="btn-secondary">↺ Làm mới xem trước</button>
+    </section>
+
+    <!-- Record controls -->
+    <section id="controls" aria-label="Điều khiển ghi">
+      <div class="controls-center">
+        <button id="rec-button" class="rec-button" aria-label="Bắt đầu ghi">
+          <span class="rec-icon">●</span>
+          <span id="rec-label" class="rec-label">GHI</span>
+        </button>
+        <div id="timer" class="timer" aria-live="polite">00:00:00</div>
+        <div id="recording-display-label" class="recording-display-label hidden"></div>
+      </div>
+    </section>
+
+    <!-- Options -->
+    <section id="options" aria-label="Tùy chọn đầu ra">
+      <h2 class="section-title">⚙ TÙY CHỌN</h2>
+      <div class="options-grid">
+        <label class="option-row" for="opt-merge">
+          <span class="option-toggle-wrap">
+            <input type="checkbox" id="opt-merge" class="option-checkbox" {% if config.merge_audio_default %}checked{% endif %} />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </span>
+          <span class="option-text">
+            Ghép audio vào video (.mp4)
+            <span class="tooltip" data-tip="Tạo file video có âm thanh mic + loa hoàn chỉnh.">?</span>
+          </span>
+        </label>
+        <label class="option-row" for="opt-mp3">
+          <span class="option-toggle-wrap">
+            <input type="checkbox" id="opt-mp3" class="option-checkbox" {% if config.convert_mp3_default %}checked{% endif %} />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </span>
+          <span class="option-text">
+            Xuất audio riêng (.mp3)
+            <span class="tooltip" data-tip="Tạo thêm file MP3 192kbps từ mic + loa.">?</span>
+          </span>
+        </label>
+
+        <!-- Khuếch đại âm thanh -->
+        <div class="option-row" style="cursor:default; flex-direction:column; align-items:flex-start; gap:10px;">
+          <span class="option-text" style="font-weight:700; letter-spacing:.06em;">
+            📈 KHUẾCH ĐẠI ÂM THANH
+            <span class="tooltip" data-tip="Nhân âm lượng khi xuất file. 2× = gấp đôi, 3× = gấp ba. Hiệu quả với mic hoặc cuộc họi bị nhỏ tiếng.">?</span>
+          </span>
+          <div style="display:flex; gap:20px; flex-wrap:wrap;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
+              🎤 Mic
+              <select id="opt-mic-gain" class="test-select">
+                <option value="1">1× (mặc định)</option>
+                <option value="2">2× khuếch đại</option>
+                <option value="3">3× khuếch đại</option>
+              </select>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
+              🔊 Loa
+              <select id="opt-spk-gain" class="test-select">
+                <option value="1">1× (mặc định)</option>
+                <option value="2">2× khuếch đại</option>
+                <option value="3">3× khuếch đại</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Test / Simulate Panel — collapsible -->
+    <section id="test-panel">
+      <details>
+        <summary class="test-panel-header">
+          🧪 Kiểm tra &amp; Mô phỏng
+          <span class="test-panel-badge">DEV</span>
+        </summary>
+        <div class="test-panel-body">
+
+          <!-- Row 1: Simulate call start/end -->
+          <div class="test-row">
+            <label class="test-label">Giả lập cuộc gọi đến:</label>
+            <div class="test-controls">
+              <select id="sim-app-select" class="test-select">
+                <option value="Zoom">🎥 Zoom</option>
+                <option value="Microsoft Teams">💼 Microsoft Teams</option>
+                <option value="Google Meet">📹 Google Meet</option>
+              </select>
+              <button id="btn-sim-start" class="btn-test-start">▶ Bắt đầu giả lập</button>
+              <button id="btn-sim-end" class="btn-test-end" disabled>■ Kết thúc giả lập</button>
+            </div>
+          </div>
+
+          <!-- Row 2: Detection method status -->
+          <div class="test-row">
+            <label class="test-label">Trạng thái phát hiện:</label>
+            <div id="detection-status-display" class="detection-status">
+              <span class="det-method">A (Process+Title): <span id="det-a">–</span></span>
+              <span class="det-method">B (Audio WASAPI): <span id="det-b">–</span></span>
+              <span class="det-method">C (WinRT API): <span id="det-c">–</span></span>
+              <span class="det-confidence">Độ tin cậy: <span id="det-conf">–</span></span>
+            </div>
+          </div>
+
+          <!-- Row 3: Last detected app -->
+          <div class="test-row">
+            <label class="test-label">Phát hiện gần nhất:</label>
+            <span id="last-detected-app" class="last-detected">Chưa có</span>
+            <span id="detection-time" class="detection-time"></span>
+          </div>
+
+        </div>
+      </details>
+    </section>
+
+    <!-- Audio meters -->
+    <section id="meters" aria-label="Mức âm thanh">
+      <h2 class="section-title">♬ MỨC ÂM THANH</h2>
+      <div class="meter-row">
+        <span class="meter-label">🎤 Mic</span>
+        <div class="level-bar-track">
+          <div id="mic-bar" class="level-bar" style="width:0%"></div>
+        </div>
+        <span id="mic-db" class="meter-db">–∞</span>
+      </div>
+      <div class="meter-row">
+        <span class="meter-label">🔊 Loa</span>
+        <div class="level-bar-track">
+          <div id="spk-bar" class="level-bar" style="width:0%"></div>
+        </div>
+        <span id="spk-db" class="meter-db">–∞</span>
+      </div>
+    </section>
+
+    <!-- Job progress -->
+    <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
+      <h2 class="section-title">⚡ XỬ LÝ</h2>
+      <div class="progress-wrap">
+        <div class="progress-bar-track">
+          <div id="progress-fill" class="progress-bar" style="width:0%"></div>
+        </div>
+        <span id="progress-pct" class="progress-pct">0%</span>
+      </div>
+      <p id="progress-stage" class="progress-stage">—</p>
+    </section>
+
+    <!-- Files -->
+    <section id="files" aria-label="File đã ghi">
+      <div class="files-header">
+        <h2 class="section-title" style="margin:0">📁 FILE ĐÃ GHI</h2>
+        <button id="open-folder-btn" class="btn-secondary">Mở thư mục</button>
+      </div>
+      <table id="files-table" class="file-table">
+        <thead>
+          <tr>
+            <th>Tên file</th><th>Loại</th><th>Kích thước</th><th>Thời điểm</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="files-tbody"></tbody>
+      </table>
+      <div id="files-empty" class="no-files hidden">Chưa có file nào.</div>
+    </section>
+
+  </main>
+
+  <!-- ══ FOOTER ══════════════════════════════════════════════════════ -->
+  <footer>
+    <div class="footer-inner">
+      <span class="output-path">📂 <code id="output-path-txt">{{ output_dir }}</code></span>
+      <span id="detector-status">🔍 Giám sát: Tắt</span>
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
