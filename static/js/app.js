@@ -349,7 +349,13 @@ function updateDetectorStatus(active) {
 // SOCKETIO LISTENERS
 // ══════════════════════════════════════════════════════════════════════
 socket.on("status_update", ({ state: s, duration_seconds }) => {
-  applyState(s, duration_seconds || 0);
+  if (s === "recording" && state.appState === "recording") {
+    // Chỉ đồng bộ giá trị giây, không restart interval để tránh giật
+    state.seconds = duration_seconds || 0;
+    timerEl.textContent = formatTime(state.seconds);
+  } else {
+    applyState(s, duration_seconds || 0);
+  }
 });
 
 socket.on("level_update", ({ mic, speaker }) => {

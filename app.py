@@ -480,6 +480,7 @@ def _emit_status() -> None:
 
 
 def _level_emitter() -> None:
+    tick = 0
     while True:
         with _state_lock:
             state = app_state
@@ -489,6 +490,9 @@ def _level_emitter() -> None:
         mic_lv = getattr(getattr(session, "audio", None), "mic_level", 0.0)
         spk_lv = getattr(getattr(session, "audio", None), "speaker_level", 0.0)
         socketio.emit("level_update", {"mic": round(mic_lv, 3), "speaker": round(spk_lv, 3)})
+        tick += 1
+        if tick % 100 == 0:  # mỗi 10 giây (100 × 0.1s) đồng bộ lại thời gian
+            _emit_status()
         socketio.sleep(0.1)
     socketio.emit("level_update", {"mic": 0.0, "speaker": 0.0})
 
