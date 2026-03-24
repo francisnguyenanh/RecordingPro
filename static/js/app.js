@@ -415,9 +415,11 @@ function renderFiles(files) {
 
   if (!files || files.length === 0) {
     empty.classList.remove("hidden");
+    updateMergeSelects([]);
     return;
   }
   empty.classList.add("hidden");
+  updateMergeSelects(files);
 
   // Sort by created_at desc
   files.sort((a, b) => b.created_at - a.created_at);
@@ -452,6 +454,70 @@ function renderFiles(files) {
     tbody.appendChild(tr);
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// MANUAL MERGE
+// ══════════════════════════════════════════════════════════════════════
+function updateMergeSelects(files) {
+  const selVideo = document.getElementById("sel-merge-video");
+  const selAudio = document.getElementById("sel-merge-audio");
+  const prevVideo = selVideo.value;
+  const prevAudio = selAudio.value;
+
+  selVideo.innerHTML = '<option value="">— Chọn file video —</option>';
+  selAudio.innerHTML = '<option value="">— Chọn file audio —</option>';
+
+  const sorted = [...files].sort((a, b) => b.created_at - a.created_at);
+  for (const f of sorted) {
+    const opt = document.createElement("option");
+    opt.value = f.name;
+    opt.textContent = f.name;
+    if (f.type === "video") {
+      selVideo.appendChild(opt);
+    } else {
+      selAudio.appendChild(opt.cloneNode(true));
+    }
+  }
+
+  if (prevVideo) selVideo.value = prevVideo;
+  if (prevAudio) selAudio.value = prevAudio;
+}
+
+document.getElementById("btn-manual-merge").addEventListener("click", async () => {
+  const video    = document.getElementById("sel-merge-video").value;
+  const audio    = document.getElementById("sel-merge-audio").value;
+  const offset   = parseInt(document.getElementById("inp-merge-offset").value) || 0;
+  const statusEl = document.getElementById("merge-status");
+
+  if (!video) { alert("Vui lòng chọn file video."); return; }
+  if (!audio) { alert("Vui lòng chọn file audio."); return; }
+
+  const btn = document.getElementById("btn-manual-merge");
+  btn.disabled = true;
+  btn.textContent = "⏳ Đang gửi…";
+  statusEl.textContent = "";
+
+  try {
+    const res = await fetch("/api/merge-files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video, audio, audio_offset_ms: offset }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      alert("Lỗi: " + (data.error || res.statusText));
+      statusEl.textContent = "✗ " + (data.error || res.statusText);
+    } else {
+      statusEl.textContent = "⏳ Đang xử lý… (xem tiến độ bên dưới)";
+    }
+  } catch (err) {
+    alert("Lỗi kết nối: " + err.message);
+    statusEl.textContent = "✗ " + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⚡ GHÉP FILE";
+  }
+});
 
 // ══════════════════════════════════════════════════════════════════════
 // OPEN FOLDER

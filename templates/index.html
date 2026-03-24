@@ -217,6 +217,36 @@
       <p id="progress-stage" class="progress-stage">—</p>
     </section>
 
+    <!-- Manual Merge -->
+    <section id="manual-merge" aria-label="Ghép file thủ công">
+      <h2 class="section-title">🔀 GHÉP FILE THỦ CÔNG</h2>
+      <div class="merge-grid">
+        <div class="merge-row">
+          <label class="merge-label">🎬 Video (.mp4)</label>
+          <select id="sel-merge-video" class="merge-select">
+            <option value="">— Chọn file video —</option>
+          </select>
+        </div>
+        <div class="merge-row">
+          <label class="merge-label">🎵 Audio (.mp3 / .wav)</label>
+          <select id="sel-merge-audio" class="merge-select">
+            <option value="">— Chọn file audio —</option>
+          </select>
+        </div>
+        <div class="merge-row">
+          <label class="merge-label">⏱ Offset audio (ms)
+            <span class="tooltip" data-tip="Dương (+): làm audio trễ hơn so với video. Âm (−): đẩy audio sớm hơn.">?</span>
+          </label>
+          <input type="number" id="inp-merge-offset" class="merge-offset-input" value="0" step="100" />
+          <span class="merge-offset-hint">ms</span>
+        </div>
+        <div class="merge-row">
+          <button id="btn-manual-merge" class="btn-merge">⚡ GHÉP FILE</button>
+          <span id="merge-status" class="merge-status"></span>
+        </div>
+      </div>
+    </section>
+
     <!-- Files -->
     <section id="files" aria-label="File đã ghi">
       <div class="files-header">

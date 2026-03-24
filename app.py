@@ -261,6 +261,94 @@ def api_delete(name: str):
     return jsonify({"ok": True})
 
 
+@app.route("/api/merge-files", methods=["POST"])
+def api_merge_files():
+    """Ghép thủ công 1 file video + 1 file audio thành file _merged.mp4."""
+    import subprocess as _sp
+    data = request.get_json(silent=True) or {}
+    video_name = data.get("video", "").strip()
+    audio_name = data.get("audio", "").strip()
+    offset_ms  = float(data.get("audio_offset_ms", 0))
+
+    if not video_name or not audio_name:
+        return jsonify({"ok": False, "error": "Cần chọn cả file video và audio."}), 400
+
+    # Security: ngăn path traversal
+    if any(c in video_name + audio_name for c in ("/", "\\", "..")):
+        return jsonify({"ok": False, "error": "Tên file không hợp lệ."}), 400
+
+    video_path = OUTPUT_DIR / video_name
+    audio_path = OUTPUT_DIR / audio_name
+
+    try:
+        video_path.resolve().relative_to(OUTPUT_DIR.resolve())
+        audio_path.resolve().relative_to(OUTPUT_DIR.resolve())
+    except ValueError:
+        return jsonify({"ok": False, "error": "Đường dẫn file không hợp lệ."}), 400
+
+    if not video_path.is_file():
+        return jsonify({"ok": False, "error": f"Không tìm thấy: {video_name}"}), 404
+    if not audio_path.is_file():
+        return jsonify({"ok": False, "error": f"Không tìm thấy: {audio_name}"}), 404
+
+    job_id = f"manual_merge_{int(time.monotonic() * 1000)}"
+
+    def _do_merge():
+        from recorder.session import _find_ffmpeg
+        try:
+            ffmpeg = _find_ffmpeg()
+        except FileNotFoundError as exc:
+            socketio.emit("job_progress", {"job_id": job_id, "stage": "error",
+                                           "message": str(exc), "percent": 0})
+            return
+
+        stem = video_path.stem
+        if stem.endswith("_video"):
+            stem = stem[:-6]
+        out_name = f"{stem}_merged.mp4"
+        out_path  = str(OUTPUT_DIR / out_name)
+        offset_s  = offset_ms / 1000.0
+
+        socketio.emit("job_progress", {
+            "job_id": job_id, "stage": "merging",
+            "message": f"Đang ghép {video_name} + {audio_name}…", "percent": 10,
+        })
+
+        cmd = [ffmpeg, "-y", "-i", str(video_path)]
+        if offset_s > 0:
+            cmd += ["-ss", f"{offset_s:.4f}", "-i", str(audio_path)]
+        elif offset_s < 0:
+            cmd += ["-itsoffset", f"{-offset_s:.4f}", "-i", str(audio_path)]
+        else:
+            cmd += ["-i", str(audio_path)]
+
+        cmd += [
+            "-filter_complex", "[1:a]aresample=async=1000[a]",
+            "-map", "0:v", "-map", "[a]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            out_path,
+        ]
+
+        proc = _sp.run(cmd, capture_output=True)
+        if proc.returncode == 0:
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "done",
+                "message": f"Ghép xong → {out_name}", "percent": 100,
+            })
+            socketio.emit("files_updated", {})
+        else:
+            err_tail = proc.stderr.decode(errors="replace")[-200:]
+            logger.error("[merge-files] ffmpeg lỗi:\n%s", err_tail)
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "error",
+                "message": "FFmpeg lỗi — xem log server", "percent": 0,
+            })
+
+    socketio.start_background_task(_do_merge)
+    return jsonify({"ok": True, "job_id": job_id})
+
+
 @app.route("/api/open-folder", methods=["POST"])
 def api_open_folder():
     try:
