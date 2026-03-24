@@ -210,15 +210,19 @@ def _post_process(
         if has_mic and has_spk:
             cmd += [
                 "-filter_complex",
-                f"[1:a]volume={mic_vol}[m];[2:a]volume={spk_vol}[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
+                f"[1:a]aresample=async=1000,volume={mic_vol}[m];[2:a]aresample=async=1000,volume={spk_vol}[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
                 "-map", "0:v", "-map", "[a]",
             ]
         elif has_mic:
-            cmd += ["-filter_complex", f"[1:a]volume={mic_vol}[m]", "-map", "0:v", "-map", "[m]"]
+            cmd += ["-filter_complex", f"[1:a]aresample=async=1000,volume={mic_vol}[m]", "-map", "0:v", "-map", "[m]"]
         else:
-            cmd += ["-filter_complex", f"[1:a]volume={spk_vol}[s]", "-map", "0:v", "-map", "[s]"]
+            cmd += ["-filter_complex", f"[1:a]aresample=async=1000,volume={spk_vol}[s]", "-map", "0:v", "-map", "[s]"]
 
-        cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", merged_path]
+        cmd += [
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            merged_path,
+        ]
 
         _emit("job_progress", {"job_id": session_id, "stage": "merging",
                                 "message": "FFmpeg đang ghép...", "percent": 30})
