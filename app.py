@@ -191,6 +191,10 @@ def api_stop():
     def _do_stop():
         global current_session, app_state
         try:
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "saving",
+                "message": "Đang lưu file video...", "percent": 0,
+            })
             session.stop(
                 merge_audio=merge_audio, convert_mp3=convert_mp3,
                 mic_gain=mic_gain, speaker_gain=speaker_gain,
@@ -602,4 +606,5 @@ def _on_startup() -> None:
 if __name__ == "__main__":
     _on_startup()
     logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
-    socketio.run(app, host="127.0.0.1", port=5010, debug=True)
+    #socketio.run(app, host="127.0.0.1", port=5011, debug=True)
+    socketio.run(app, host="127.0.0.1", port=5012, debug=True)

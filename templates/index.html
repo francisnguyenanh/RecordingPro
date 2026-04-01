@@ -90,8 +90,9 @@
 
     <!-- Options -->
     <section id="options" aria-label="Tùy chọn đầu ra">
-      <h2 class="section-title">⚙ TÙY CHỌN</h2>
-      <div class="options-grid">
+      <details>
+        <summary class="section-title" style="cursor:pointer; outline:none; list-style-position: inside; user-select:none;">⚙ TÙY CHỌN</summary>
+        <div class="options-grid" style="padding-top:10px;">
         <label class="option-row" for="opt-merge">
           <span class="option-toggle-wrap">
             <input type="checkbox" id="opt-merge" class="option-checkbox" {% if config.merge_audio_default %}checked{% endif %} />
@@ -139,6 +140,7 @@
           </div>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Test / Simulate Panel — collapsible -->
@@ -219,8 +221,9 @@
 
     <!-- Manual Merge -->
     <section id="manual-merge" aria-label="Ghép file thủ công">
-      <h2 class="section-title">🔀 GHÉP FILE THỦ CÔNG</h2>
-      <div class="merge-grid">
+      <details>
+        <summary class="section-title" style="cursor:pointer; outline:none; list-style-position: inside; user-select:none;">🔀 GHÉP FILE THỦ CÔNG</summary>
+        <div class="merge-grid" style="padding-top:10px;">
         <div class="merge-row">
           <label class="merge-label">🎬 Video (.mp4)</label>
           <select id="sel-merge-video" class="merge-select">
@@ -245,14 +248,19 @@
           <span id="merge-status" class="merge-status"></span>
         </div>
       </div>
+      </details>
     </section>
 
     <!-- Files -->
     <section id="files" aria-label="File đã ghi">
-      <div class="files-header">
-        <h2 class="section-title" style="margin:0">📁 FILE ĐÃ GHI</h2>
-        <button id="open-folder-btn" class="btn-secondary">Mở thư mục</button>
-      </div>
+      <details>
+        <summary style="cursor:pointer; outline:none; user-select:none;">
+          <div class="files-header" style="display:inline-flex; align-items:center; width:calc(100% - 20px); justify-content:space-between; margin-bottom:0;">
+            <h2 class="section-title" style="margin:0; display:inline-block;">📁 FILE ĐÃ GHI</h2>
+            <button id="open-folder-btn" class="btn-secondary" onclick="event.stopPropagation();">Mở thư mục</button>
+          </div>
+        </summary>
+        <div style="padding-top:15px;">
       <table id="files-table" class="file-table">
         <thead>
           <tr>
@@ -262,6 +270,8 @@
         <tbody id="files-tbody"></tbody>
       </table>
       <div id="files-empty" class="no-files hidden">Chưa có file nào.</div>
+      </div>
+      </details>
     </section>
 
   </main>

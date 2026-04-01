@@ -176,6 +176,10 @@ def _post_process(
         })
         video_path = _concat_video_segments(ffmpeg, session_id, valid_paths)
     elif valid_paths:
+        _emit("job_progress", {
+            "job_id": session_id, "stage": "saving",
+            "message": "Đang lưu và hoàn thiện file video...", "percent": 10,
+        })
         # Rename single segment to canonical name
         canonical = str(OUTPUT_DIR / f"{session_id}_video.mp4")
         if valid_paths[0] != canonical:
