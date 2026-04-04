@@ -55,11 +55,11 @@
       <div class="header-right">
         <span id="status-dot" class="status-dot idle"></span>
         <span id="status-label" class="status-label">SẴN SÀNG</span>
-        <label class="toggle-switch" title="Tự động phát hiện và hỏi ghi cuộc gọi">
+        <label class="toggle-switch" title="Tự động phát hiện và hỏi ghi cuộc gọi" style="display:none;">
           <input type="checkbox" id="auto-detect-toggle" {% if config.auto_detect_calls %}checked{% endif %} />
           <span class="slider"></span>
         </label>
-        <span class="toggle-label">Tự động</span>
+        <span class="toggle-label" style="display:none;">Tự động</span>
       </div>
     </div>
   </header>
@@ -85,6 +85,34 @@
         </button>
         <div id="timer" class="timer" aria-live="polite">00:00:00</div>
         <div id="recording-display-label" class="recording-display-label hidden"></div>
+      </div>
+    </section>
+
+    <!-- Job progress -->
+    <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
+      <h2 class="section-title">⚡ XỬ LÝ — CHI TIẾT</h2>
+      <div class="step-indicator" id="step-indicator">Bước — / —</div>
+      <div id="log-container" class="log-container">
+        <div class="log-entry">⏳ Bắt đầu xử lý...</div>
+      </div>
+    </section>
+
+    <!-- Audio meters -->
+    <section id="meters" aria-label="Mức âm thanh">
+      <h2 class="section-title">♬ MỨC ÂM THANH</h2>
+      <div class="meter-row">
+        <span class="meter-label">🎤 Mic</span>
+        <div class="level-bar-track">
+          <div id="mic-bar" class="level-bar" style="width:0%"></div>
+        </div>
+        <span id="mic-db" class="meter-db">–∞</span>
+      </div>
+      <div class="meter-row">
+        <span class="meter-label">🔊 Loa</span>
+        <div class="level-bar-track">
+          <div id="spk-bar" class="level-bar" style="width:0%"></div>
+        </div>
+        <span id="spk-db" class="meter-db">–∞</span>
       </div>
     </section>
 
@@ -188,36 +216,9 @@
       </details>
     </section>
 
-    <!-- Audio meters -->
-    <section id="meters" aria-label="Mức âm thanh">
-      <h2 class="section-title">♬ MỨC ÂM THANH</h2>
-      <div class="meter-row">
-        <span class="meter-label">🎤 Mic</span>
-        <div class="level-bar-track">
-          <div id="mic-bar" class="level-bar" style="width:0%"></div>
-        </div>
-        <span id="mic-db" class="meter-db">–∞</span>
-      </div>
-      <div class="meter-row">
-        <span class="meter-label">🔊 Loa</span>
-        <div class="level-bar-track">
-          <div id="spk-bar" class="level-bar" style="width:0%"></div>
-        </div>
-        <span id="spk-db" class="meter-db">–∞</span>
-      </div>
-    </section>
+    
 
-    <!-- Job progress -->
-    <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
-      <h2 class="section-title">⚡ XỬ LÝ</h2>
-      <div class="progress-wrap">
-        <div class="progress-bar-track">
-          <div id="progress-fill" class="progress-bar" style="width:0%"></div>
-        </div>
-        <span id="progress-pct" class="progress-pct">0%</span>
-      </div>
-      <p id="progress-stage" class="progress-stage">—</p>
-    </section>
+    
 
     <!-- Manual Merge -->
     <section id="manual-merge" aria-label="Ghép file thủ công">

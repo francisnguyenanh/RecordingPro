@@ -29,9 +29,6 @@ const spkBar        = document.getElementById("spk-bar");
 const micDb         = document.getElementById("mic-db");
 const spkDb         = document.getElementById("spk-db");
 const jobSection    = document.getElementById("job-progress");
-const progressFill  = document.getElementById("progress-fill");
-const progressPct   = document.getElementById("progress-pct");
-const progressStage = document.getElementById("progress-stage");
 const displayGrid   = document.getElementById("display-grid");
 const recDispLabel  = document.getElementById("recording-display-label");
 const detectorStatus = document.getElementById("detector-status");
@@ -364,15 +361,29 @@ socket.on("level_update", ({ mic, speaker }) => {
   updateMeter("spk-bar", "spk-db", speaker || 0);
 });
 
-socket.on("job_progress", ({ stage, message, percent }) => {
+socket.on("job_progress", ({ stage, message, log_type, current_step, total_steps }) => {
+  const logContainer = document.getElementById("log-container");
+  const stepIndicator = document.getElementById("step-indicator");
   jobSection.classList.remove("hidden");
-  progressFill.style.width = (percent || 0) + "%";
-  progressPct.textContent  = (percent || 0) + "%";
-  progressStage.textContent = message || stage;
+  
+  // Cập nhật step indicator
+  if (current_step && total_steps) {
+    stepIndicator.textContent = `Bước ${current_step} / ${total_steps}`;
+  }
+  
+  // Thêm log entry
+  const entry = document.createElement("div");
+  entry.className = `log-entry log-${log_type || 'info'}`;
+  const timestamp = new Date().toLocaleTimeString("vi-VN");
+  entry.textContent = `[${timestamp}] ${message || stage}`;
+  logContainer.appendChild(entry);
+  logContainer.scrollTop = logContainer.scrollHeight;
+  
   if (stage === "done" || stage === "error") {
     setTimeout(() => {
       jobSection.classList.add("hidden");
-      progressFill.style.width = "0%";
+      logContainer.innerHTML = '<div class="log-entry">⏳ Bắt đầu xử lý...</div>';
+      stepIndicator.textContent = 'Bước — / —';
     }, 3000);
   }
 });
