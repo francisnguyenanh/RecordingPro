@@ -23,12 +23,13 @@ class VideoEngine:
     và ghép lại trong bước hậu xử lý.
     """
 
-    def __init__(self, session_id: str, display_index: int = 1):
+    def __init__(self, session_id: str, display_index: int = 1, output_dir=None):
         """
         display_index: 1-based (giống mss monitors[1]).
         Đối với dxcam: output_idx = display_index - 1 (0-based).
         """
         self.session_id = session_id
+        self._output_dir = output_dir or OUTPUT_DIR
         self.display_index = display_index
         self.start_timestamp: float | None = None
         self.frame_count = 0
@@ -64,7 +65,7 @@ class VideoEngine:
         """Vòng lặp ngoài: xử lý nhiều segment khi chuyển màn hình."""
         seg_idx = 0
         while self.recording:
-            path = OUTPUT_DIR / f"{self.session_id}_v{seg_idx}.mp4"
+            path = self._output_dir / f"{self.session_id}_v{seg_idx}.mp4"
             self._segment_paths.append(str(path))
 
             # Thử dxcam trước; nếu không khả dụng, dùng mss
@@ -124,8 +125,13 @@ class VideoEngine:
                         self.start_timestamp = time.perf_counter()
                     first_frame = False
 
+                t_start = time.perf_counter()
                 writer.write(frame)
                 self.frame_count += 1
+                elapsed = time.perf_counter() - t_start
+                sleep_t = FRAME_INTERVAL - elapsed
+                if sleep_t > 0:
+                    time.sleep(sleep_t)
 
             camera.stop()
             del camera

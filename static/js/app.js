@@ -412,8 +412,8 @@ socket.on("display_switched", ({ display_index }) => {
 async function loadFiles() {
   try {
     const res = await fetch("/api/files");
-    const files = await res.json();
-    renderFiles(files);
+    const data = await res.json();
+    renderFiles(data.files || []);
   } catch (err) {
     console.error("Lỗi tải danh sách file:", err);
   }

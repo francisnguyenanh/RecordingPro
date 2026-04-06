@@ -15,6 +15,7 @@ CHANNELS = 2
 BLOCKSIZE = 1024
 OUTPUT_DIR = Path.home() / "Videos" / "ScreenCapturePro"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+FLUSH_INTERVAL_SECONDS = 60  # Định kỳ flush xuống đĩa mỗi 60 giây
 
 
 def _rms_level(data: np.ndarray) -> float:
@@ -29,8 +30,9 @@ def _rms_level(data: np.ndarray) -> float:
 class AudioEngine:
     """Ghi mic + loopback speaker, tính mức tín hiệu real-time."""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, output_dir: Path = None):
         self.session_id = session_id
+        self._output_dir: Path = output_dir or OUTPUT_DIR
         self.mic_frames: list[bytes] = []
         self.speaker_frames: list[bytes] = []
         self.mic_level: float = 0.0
@@ -42,19 +44,62 @@ class AudioEngine:
         # Thông số thực tế của luồng loopback (có thể khác SAMPLE_RATE/CHANNELS)
         self._speaker_sr: int = SAMPLE_RATE
         self._speaker_ch: int = CHANNELS
+        # Flush-to-disk state (tránh tích lũy RAM không giới hạn)
+        self._mic_wf: wave.Wave_write | None = None
+        self._spk_wf: wave.Wave_write | None = None
+        self._mic_wav_path: Path | None = None
+        self._spk_wav_path: Path | None = None
+        self._flush_lock = threading.Lock()
+        self._flush_stop = threading.Event()
 
     # ------------------------------------------------------------------
     def start(self) -> None:
         import time
         self.recording = True
         self.start_timestamp = time.perf_counter()
+        self._mic_wav_path = self._output_dir / f"{self.session_id}_mic.wav"
+        self._spk_wav_path = self._output_dir / f"{self.session_id}_speaker.wav"
+        self._flush_stop.clear()
 
         t_mic = threading.Thread(target=self._record_mic, daemon=True, name="mic-recorder")
         t_spk = threading.Thread(target=self._record_loopback, daemon=True, name="spk-recorder")
-        self._threads = [t_mic, t_spk]
+        t_flush = threading.Thread(target=self._flush_loop, daemon=True, name="audio-flush")
+        self._threads = [t_mic, t_spk, t_flush]
         t_mic.start()
         t_spk.start()
+        t_flush.start()
         logger.info("[AudioEngine] Đã bắt đầu ghi âm (session=%s)", self.session_id)
+
+    # ------------------------------------------------------------------
+    def _flush_loop(self) -> None:
+        """Định kỳ flush dữ liệu âm thanh xuống đĩa để giới hạn RAM."""
+        while not self._flush_stop.wait(FLUSH_INTERVAL_SECONDS):
+            self._flush_to_disk()
+
+    def _flush_to_disk(self) -> None:
+        """Ghi các frame đang chờ xuống file WAV. Giữ wave.Wave_write mở giữa các lần flush."""
+        with self._flush_lock:
+            with self._lock:
+                mic_data = self.mic_frames[:]
+                self.mic_frames.clear()
+                spk_data = self.speaker_frames[:]
+                self.speaker_frames.clear()
+
+            if mic_data and self._mic_wav_path is not None:
+                if self._mic_wf is None:
+                    self._mic_wf = wave.open(str(self._mic_wav_path), "wb")
+                    self._mic_wf.setnchannels(CHANNELS)
+                    self._mic_wf.setsampwidth(2)
+                    self._mic_wf.setframerate(SAMPLE_RATE)
+                self._mic_wf.writeframes(b"".join(mic_data))
+
+            if spk_data and self._spk_wav_path is not None:
+                if self._spk_wf is None:
+                    self._spk_wf = wave.open(str(self._spk_wav_path), "wb")
+                    self._spk_wf.setnchannels(self._speaker_ch)
+                    self._spk_wf.setsampwidth(2)
+                    self._spk_wf.setframerate(self._speaker_sr)
+                self._spk_wf.writeframes(b"".join(spk_data))
 
     # ------------------------------------------------------------------
     def _record_mic(self) -> None:
@@ -202,28 +247,29 @@ class AudioEngine:
 
     # ------------------------------------------------------------------
     def stop(self) -> dict:
-        """Dừng ghi, lưu file WAV, trả về dict đường dẫn."""
+        """Dừng ghi, flush cuối cùng, đóng file WAV, trả về dict đường dẫn."""
         self.recording = False
+        self._flush_stop.set()
         for t in self._threads:
             t.join(timeout=3)
 
+        # Flush toàn bộ frame còn lại sau khi thread ghi đã dừng
+        self._flush_to_disk()
+
         result: dict = {}
+        with self._flush_lock:
+            if self._mic_wf is not None:
+                self._mic_wf.close()
+                self._mic_wf = None
+                result["mic"] = str(self._mic_wav_path)
+                logger.info("[AudioEngine] Đã lưu mic: %s", self._mic_wav_path)
 
-        # Lưu mic
-        if self.mic_frames:
-            mic_path = OUTPUT_DIR / f"{self.session_id}_mic.wav"
-            self._save_wav(mic_path, self.mic_frames)
-            result["mic"] = str(mic_path)
-            logger.info("[AudioEngine] Đã lưu mic: %s", mic_path)
-
-        # Lưu speaker
-        if self.speaker_frames:
-            spk_path = OUTPUT_DIR / f"{self.session_id}_speaker.wav"
-            self._save_wav(spk_path, self.speaker_frames,
-                           sr=self._speaker_sr, ch=self._speaker_ch)
-            result["speaker"] = str(spk_path)
-            logger.info("[AudioEngine] Đã lưu speaker: %s (sr=%d, ch=%d)",
-                        spk_path, self._speaker_sr, self._speaker_ch)
+            if self._spk_wf is not None:
+                self._spk_wf.close()
+                self._spk_wf = None
+                result["speaker"] = str(self._spk_wav_path)
+                logger.info("[AudioEngine] Đã lưu speaker: %s (sr=%d, ch=%d)",
+                            self._spk_wav_path, self._speaker_sr, self._speaker_ch)
 
         return result
 

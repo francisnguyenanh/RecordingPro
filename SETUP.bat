@@ -25,7 +25,7 @@ python --version >nul 2>&1
 if not errorlevel 1 (
     for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYVER=%%v
     echo  [OK] Python %PYVER% da co san.
-    goto :install_ffmpeg
+    goto :check_bundled_ffmpeg
 )
 
 echo  Chua co Python. Dang cai dat...
@@ -43,44 +43,27 @@ if errorlevel 1 (
 for /f "tokens=*" %%i in ('powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH','User')"') do set "PATH=%%i"
 echo  [OK] Python da cai dat thanh cong.
 
-:install_ffmpeg
+:check_bundled_ffmpeg
 echo.
 
-:: ── 2. Cai FFmpeg ───────────────────────────────────────────────────
-echo [2/5] Kiem tra FFmpeg...
-ffmpeg -version >nul 2>&1
-if not errorlevel 1 (
-    echo  [OK] FFmpeg da co trong PATH.
+:: ── 2. Kiem tra FFmpeg bundled ──────────────────────────────────────
+echo [2/5] Kiem tra FFmpeg bundled...
+if exist "%SCRIPT_DIR%bin\ffmpeg.exe" (
+    echo  [OK] Phat hien bin\ffmpeg.exe - su dung bundled binary.
     goto :create_venv
 )
 
-echo  Chua co FFmpeg. Dang cai dat...
-if not exist "%INSTALLERS_DIR%\ffmpeg.zip" (
-    echo  [LOI] Khong tim thay installers\ffmpeg.zip
-    echo  Vui long chay download_installers.bat truoc
-    pause & exit /b 1
-)
-
-:: Giai nen ffmpeg vao C:\ffmpeg
-echo  Dang giai nen FFmpeg vao C:\ffmpeg ...
-powershell -NoProfile -Command "Expand-Archive -Path '%INSTALLERS_DIR%\ffmpeg.zip' -DestinationPath 'C:\ffmpeg_tmp' -Force"
-
-:: Tim thu muc ffmpeg ben trong zip (ten co the thay doi theo phien ban)
-for /d %%d in ("C:\ffmpeg_tmp\ffmpeg-*") do (
-    xcopy /E /I /Y "%%d" "C:\ffmpeg" >nul 2>&1
-)
-rd /s /q "C:\ffmpeg_tmp" >nul 2>&1
-
-:: Them C:\ffmpeg\bin vao System PATH
-powershell -NoProfile -Command "$old=[System.Environment]::GetEnvironmentVariable('PATH','Machine'); if ($old -notlike '*C:\ffmpeg\bin*'){[System.Environment]::SetEnvironmentVariable('PATH',$old+';C:\ffmpeg\bin','Machine')}"
-set "PATH=%PATH%;C:\ffmpeg\bin"
-
+:: Fallback: kiem tra PATH
 ffmpeg -version >nul 2>&1
-if errorlevel 1 (
-    echo  [LOI] Cai FFmpeg that bai!
-    pause & exit /b 1
+if not errorlevel 1 (
+    echo  [OK] FFmpeg co trong PATH - su dung.
+    goto :create_venv
 )
-echo  [OK] FFmpeg da cai dat thanh cong.
+
+echo  [CANH BAO] Khong tim thay ffmpeg.exe trong bin\ va khong co trong PATH.
+echo  Chay download_ffmpeg.bat de tai tu dong, hoac dat ffmpeg.exe vao thu muc bin\
+echo  App van co the chay nhung se LOI khi xu ly video.
+echo.
 
 :create_venv
 echo.

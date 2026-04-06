@@ -1,2 +1,6 @@
 /.venv
 /__pycache__
+
+# FFmpeg bundled binary — chạy download_ffmpeg.bat để tạo lại
+bin/ffmpeg.exe
+bin/ffmpeg

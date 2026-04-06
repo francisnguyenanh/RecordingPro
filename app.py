@@ -154,7 +154,7 @@ def api_start():
         display_index = int(data.get("display_index", 1))
 
         from recorder.session import RecordingSession
-        session = RecordingSession(display_index=display_index)
+        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR)
         try:
             session.start()
         except Exception as exc:
@@ -269,6 +269,12 @@ def api_status():
 
 @app.route("/api/files", methods=["GET"])
 def api_files():
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = min(max(int(request.args.get("per_page", 50)), 1), 200)
+    except (ValueError, TypeError):
+        page, per_page = 1, 50
+
     files = []
     for p in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.suffix.lower() not in (".mp4", ".mp3", ".wav"):
@@ -283,7 +289,15 @@ def api_files():
             "created_at": int(stat.st_mtime),
             "download_url": f"/api/download/{p.name}",
         })
-    return jsonify(files)
+
+    total = len(files)
+    start = (page - 1) * per_page
+    return jsonify({
+        "files": files[start : start + per_page],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    })
 
 
 @app.route("/api/download/<name>", methods=["GET"])
@@ -591,7 +605,7 @@ def _start_session(display_index: int = 1) -> None:
         if app_state != "idle":
             return
         from recorder.session import RecordingSession
-        session = RecordingSession(display_index=display_index)
+        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR)
         try:
             session.start()
         except Exception as exc:
@@ -629,9 +643,9 @@ def _level_emitter() -> None:
         spk_lv = getattr(getattr(session, "audio", None), "speaker_level", 0.0)
         socketio.emit("level_update", {"mic": round(mic_lv, 3), "speaker": round(spk_lv, 3)})
         tick += 1
-        if tick % 100 == 0:  # mỗi 10 giây (100 × 0.1s) đồng bộ lại thời gian
+        if tick % 50 == 0:  # mỗi 10 giây (50 × 0.2s) đồng bộ lại thời gian
             _emit_status()
-        socketio.sleep(0.1)
+        socketio.sleep(0.2)
     socketio.emit("level_update", {"mic": 0.0, "speaker": 0.0})
 
 
@@ -649,6 +663,6 @@ def _on_startup() -> None:
 
 if __name__ == "__main__":
     _on_startup()
-    logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
+    logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5012")
     #socketio.run(app, host="127.0.0.1", port=5011, debug=True)
     socketio.run(app, host="127.0.0.1", port=5012, debug=True)

@@ -8,283 +8,481 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:     '#0d0d0d',
+            bg2:    '#111111',
+            bg3:    '#1a1a1a',
+            border: '#252525',
+            dim:    '#666666',
+            accent: '#c8c8c8',
+            red:    '#ff3c3c',
+            green:  '#39ff14',
+            yellow: '#f0c040',
+          },
+          fontFamily: {
+            mono: ['"Courier Prime"', '"Courier New"', 'monospace'],
+          },
+          borderRadius: {
+            DEFAULT: '4px',
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    /* Animations */
+    @keyframes pulse    { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.35);opacity:.7} }
+    @keyframes spin-dot { 0%{transform:rotate(0)scale(1)} 50%{transform:rotate(180deg)scale(1.2)} 100%{transform:rotate(360deg)scale(1)} }
+    @keyframes rec-glow { 0%,100%{box-shadow:0 0 10px rgba(255,60,60,.4)} 50%{box-shadow:0 0 28px rgba(255,60,60,.8)} }
+    @keyframes blink    { 0%,100%{opacity:1} 50%{opacity:.35} }
+    @keyframes modalIn  { from{transform:scale(.95);opacity:0} to{transform:scale(1);opacity:1} }
+    @keyframes toastIn  { from{transform:translateY(10px);opacity:0} to{transform:translateY(0);opacity:1} }
+    @keyframes stripe-move { from{background-position:0 0} to{background-position:28px 0} }
+    @keyframes breathe  { 0%,100%{opacity:.3} 50%{opacity:.7} }
+
+    /* JS-toggled state classes */
+    .hidden { display: none !important; }
+    .status-dot.recording  { background:#ff3c3c; animation:pulse 1s ease-in-out infinite; }
+    .status-dot.processing { background:#f0c040; animation:spin-dot 1.2s linear infinite; }
+    .rec-button.recording  { border-color:#ff3c3c; background:rgba(255,60,60,.12); animation:rec-glow 1.2s ease-in-out infinite; }
+    .rec-button.processing { border-color:#f0c040; color:#f0c040; cursor:not-allowed; }
+    .rec-button:disabled   { opacity:.5; cursor:not-allowed; }
+    .recording-display-label { animation:blink 1.2s infinite; }
+    .display-card.active   { border-color:#39ff14; box-shadow:0 0 8px rgba(57,255,20,.2); }
+    .display-card.active .display-label { color:#39ff14; }
+    .level-bar.yellow { background:#f0c040; }
+    .level-bar.red    { background:#ff3c3c; }
+    .level-bar.breathing { animation:breathe 1.5s ease-in-out infinite; min-width:6px; }
+    .log-entry { padding:3px 0; word-break:break-word; }
+    .log-entry.log-success { color:#39ff14; }
+    .log-entry.log-error   { color:#ff3c3c; }
+    .log-entry.log-info    { color:#60a5fa; }
+    .file-row td { padding:10px; border-bottom:1px solid #181818; transition:background .15s; vertical-align:middle; }
+    .file-row:hover td { background:#1a1a1a; }
+    .file-badge { display:inline-block; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+    .badge-video { background:rgba(255,60,60,.15); color:#ff3c3c; }
+    .badge-audio { background:rgba(57,255,20,.12); color:#39ff14; }
+    .badge-wav   { background:rgba(240,192,64,.12); color:#f0c040; }
+    .modal-box { animation:modalIn .15s ease; }
+    .toast     { animation:toastIn .2s ease; }
+    #detector-status.active { color:#39ff14; }
+    details[open] .test-panel-header { color:#aaa; border-bottom:1px solid #1e1e1e; }
+
+    /* Progress bar stripes */
+    .progress-bar {
+      background: repeating-linear-gradient(45deg,#39ff14,#39ff14 10px,rgba(57,255,20,.6) 10px,rgba(57,255,20,.6) 20px);
+      background-size:28px 28px;
+      animation:stripe-move .8s linear infinite;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width:6px; }
+    ::-webkit-scrollbar-track { background:#0d0d0d; }
+    ::-webkit-scrollbar-thumb { background:#333; border-radius:3px; }
+    ::-webkit-scrollbar-thumb:hover { background:#444; }
+
+    /* Toggle switch */
+    .toggle-switch { position:relative; display:inline-block; width:36px; height:18px; cursor:pointer; }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .slider { position:absolute; inset:0; background:#333; border-radius:9px; transition:background .15s; border:1px solid #444; }
+    .slider::before { content:""; position:absolute; width:12px; height:12px; top:2px; left:2px; border-radius:50%; background:#888; transition:transform .15s,background .15s; }
+    .toggle-switch input:checked + .slider { background:#ff3c3c; border-color:#ff3c3c; }
+    .toggle-switch input:checked + .slider::before { transform:translateX(18px); background:#fff; }
+    .toggle-track { display:block; width:40px; height:20px; border-radius:10px; background:#333; border:1px solid #444; position:relative; transition:background .15s; cursor:pointer; }
+    .option-checkbox { position:absolute; opacity:0; width:0; height:0; }
+    .option-checkbox:checked + .toggle-track { background:#ff3c3c; border-color:#ff3c3c; }
+    .toggle-thumb { position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#aaa; transition:transform .15s,background .15s; }
+    .option-checkbox:checked + .toggle-track .toggle-thumb { transform:translateX(20px); background:#fff; }
+
+    /* Tooltip */
+    .tooltip { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; border:1px solid #666; font-size:10px; color:#666; cursor:help; position:relative; }
+    .tooltip::after { content:attr(data-tip); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%); background:#222; border:1px solid #252525; color:#c8c8c8; font-size:11px; padding:6px 10px; border-radius:4px; width:200px; text-align:left; pointer-events:none; opacity:0; transition:opacity .15s; z-index:200; }
+    .tooltip:hover::after { opacity:1; }
+
+    /* Display cards (JS-generated) */
+    .display-card { border:1px solid #333; border-radius:4px; padding:8px; cursor:pointer; background:#111111; min-width:160px; max-width:220px; flex:1; transition:border-color .15s, box-shadow .15s; }
+    .display-card:hover { border-color:#555; }
+    .display-preview { width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:2px; background:#0a0a0a; display:block; }
+    .display-label { font-size:.75rem; color:#aaa; margin-top:6px; font-family:'Courier Prime','Courier New',monospace; }
+    .display-res { font-size:.65rem; color:#555; font-family:'Courier Prime','Courier New',monospace; }
+
+    /* File rows (JS-generated) */
+    .file-name { color:#c8c8c8; word-break:break-all; }
+    .file-time { color:#666666; font-size:11px; }
+    .file-actions { display:flex; gap:8px; }
+    .btn-dl, .btn-del { font-family:'Courier Prime','Courier New',monospace; font-size:11px; padding:4px 10px; border-radius:4px; border:1px solid; cursor:pointer; transition:all .15s; text-decoration:none; display:inline-flex; align-items:center; gap:4px; background:transparent; }
+    .btn-dl  { border-color:#39ff14; color:#39ff14; }
+    .btn-dl:hover  { background:rgba(57,255,20,.10); }
+    .btn-del { border-color:#ff3c3c; color:#ff3c3c; }
+    .btn-del:hover { background:rgba(255,60,60,.10); }
+
+    /* Test panel hidden by default */
+    #test-panel { display: none !important; }
+
+    /* CSS custom properties */
+    :root { --dim: #666666; }
+
+    /* Tab layout */
+    .tab-btn.active { color:#c8c8c8 !important; background:#1a1a1a !important; border-color:#252525 #252525 #1a1a1a #252525 !important; }
+    .tab-btn:not(.active):hover { color:#888 !important; }
+    .tab-panel { display:none; height:100%; overflow:hidden; }
+    .tab-panel.active { display:flex; }
+
+    /* Viewport lock */
+    html, body { height:100%; overflow:hidden; }
+
+    /* Section title spacing */
+    .section-title { margin-bottom:8px; }
+  </style>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
-<body>
+<body class="bg-bg text-accent font-mono text-sm leading-relaxed"
+      style="height:100vh; display:grid; grid-template-rows:auto auto 1fr auto; overflow:hidden;">
 
   <!-- ══ MODAL: Phát hiện cuộc gọi ══════════════════════════════════ -->
-  <div id="call-modal-overlay" class="modal-overlay hidden" onclick="handleOverlayClick(event)">
-    <div id="call-modal" class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <div class="modal-icon" id="modal-app-icon">📡</div>
-      <h2 class="modal-title" id="modal-title">Phát hiện cuộc gọi</h2>
-      <p class="modal-app-name" id="modal-app-name">—</p>
-      <p class="modal-question">Bạn có muốn bắt đầu ghi màn hình không?</p>
-      <div class="modal-display-hint">
-        <span class="modal-display-label">Màn hình: </span>
-        <span id="modal-display-name" class="modal-display-value">Display 1</span>
-        <button class="btn-link" onclick="dismissModal(); scrollToDisplaySelector()">Đổi</button>
+  <div id="call-modal-overlay" class="modal-overlay hidden fixed inset-0 bg-black/75 flex items-center justify-center z-[1000] backdrop-blur-sm" onclick="handleOverlayClick(event)">
+    <div id="call-modal" class="modal-box bg-[#111] border border-[#444] rounded-md px-7 py-8 w-[340px] text-center font-mono shadow-[0_0_40px_rgba(0,0,0,0.8)]" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-icon text-[2.5rem] mb-2" id="modal-app-icon">📡</div>
+      <h2 class="modal-title text-[0.9rem] text-[#aaa] mb-1 tracking-[0.08em] uppercase" id="modal-title">Phát hiện cuộc gọi</h2>
+      <p class="modal-app-name text-[1.3rem] text-white font-bold mb-2.5" id="modal-app-name">—</p>
+      <p class="modal-question text-[#888] text-[0.85rem] mb-3.5">Bạn có muốn bắt đầu ghi màn hình không?</p>
+      <div class="modal-display-hint text-[0.75rem] text-[#555] mb-5">
+        <span class="modal-display-label text-[#555]">Màn hình: </span>
+        <span id="modal-display-name" class="modal-display-value text-green">Display 1</span>
+        <button class="btn-link bg-transparent border-none text-[#666] underline cursor-pointer font-mono text-[0.75rem] px-1 transition-colors hover:text-[#999]" onclick="dismissModal(); scrollToDisplaySelector()">Đổi</button>
       </div>
-      <div class="modal-actions">
-        <button id="modal-confirm-record" class="modal-btn-confirm">⏺ Bắt đầu ghi</button>
-        <button id="modal-dismiss" class="modal-btn-dismiss">✕ Bỏ qua</button>
+      <div class="modal-actions flex gap-2.5 justify-center">
+        <button id="modal-confirm-record" class="modal-btn-confirm bg-red text-white border-none rounded-[3px] px-5 py-2.5 font-mono text-[0.9rem] cursor-pointer transition-all hover:bg-[#cc2222]">⏺ Bắt đầu ghi</button>
+        <button id="modal-dismiss" class="modal-btn-dismiss bg-transparent text-[#555] border border-[#333] rounded-[3px] px-4 py-2.5 font-mono text-[0.9rem] cursor-pointer transition-all hover:text-[#888] hover:border-[#555]">✕ Bỏ qua</button>
       </div>
     </div>
   </div>
 
   <!-- ══ TOAST: Cuộc gọi kết thúc ═══════════════════════════════════ -->
-  <div id="call-ended-toast" class="toast hidden">
+  <div id="call-ended-toast" class="toast hidden fixed bottom-6 right-6 bg-[#111] border border-green rounded px-4 py-3 font-mono text-accent text-[0.85rem] min-w-[260px] z-[999] shadow-[0_0_12px_rgba(57,255,20,0.15)]">
     <div class="toast-content">
-      <span id="toast-app-name" class="toast-appname">—</span>
+      <span id="toast-app-name" class="toast-appname text-green font-bold">—</span>
       <span class="toast-msg"> đã kết thúc. Dừng ghi?</span>
     </div>
-    <div class="toast-actions">
-      <button id="toast-stop" class="btn-toast-stop">■ Dừng</button>
-      <button id="toast-continue" class="btn-toast-continue">▶ Tiếp tục</button>
+    <div class="toast-actions flex gap-2 mt-2.5">
+      <button id="toast-stop" class="btn-toast-stop bg-red text-white border-none rounded-sm px-3 py-1.5 font-mono text-[0.8rem] cursor-pointer transition-opacity hover:opacity-85">■ Dừng</button>
+      <button id="toast-continue" class="btn-toast-continue bg-transparent text-[#555] border border-[#333] rounded-sm px-3 py-1.5 font-mono text-[0.8rem] cursor-pointer transition-all hover:text-[#888] hover:border-[#555]">▶ Tiếp tục</button>
     </div>
-    <div id="toast-timer-bar" class="toast-timer-bar"></div>
+    <div id="toast-timer-bar" class="toast-timer-bar h-0.5 bg-green mt-2.5 w-full"></div>
   </div>
 
   <!-- ══ HEADER ══════════════════════════════════════════════════════ -->
-  <header>
-    <div class="header-inner">
-      <div class="brand">
-        <span class="brand-icon">⬛</span>
-        <h1>ScreenCapturePro <span class="version-badge">v2</span></h1>
+  <header class="border-b border-border bg-bg2 px-6 py-3 z-[100]">
+    <div class="header-inner max-w-[900px] mx-auto flex items-center justify-between gap-3">
+      <div class="brand flex items-center gap-2.5">
+        <span class="brand-icon text-lg text-red">⬛</span>
+        <h1 class="text-[17px] font-bold tracking-[0.12em] text-accent uppercase">
+          ScreenCapturePro
+          <span class="version-badge inline-block text-[10px] bg-red/20 text-red border border-red/40 rounded-sm px-1 py-px align-middle ml-1">v2</span>
+        </h1>
       </div>
-      <div class="header-right">
-        <span id="status-dot" class="status-dot idle"></span>
-        <span id="status-label" class="status-label">SẴN SÀNG</span>
+      <div class="header-right flex items-center gap-2.5">
+        <span id="status-dot" class="status-dot idle w-2.5 h-2.5 rounded-full bg-[#444] inline-block transition-colors"></span>
+        <span id="status-label" class="status-label text-[11px] tracking-[0.15em] text-dim font-bold uppercase">SẴN SÀNG</span>
         <label class="toggle-switch" title="Tự động phát hiện và hỏi ghi cuộc gọi" style="display:none;">
           <input type="checkbox" id="auto-detect-toggle" {% if config.auto_detect_calls %}checked{% endif %} />
           <span class="slider"></span>
         </label>
-        <span class="toggle-label" style="display:none;">Tự động</span>
+        <span class="toggle-label text-[11px] text-dim" style="display:none;">Tự động</span>
       </div>
     </div>
   </header>
 
+  <!-- ══ TAB BAR ════════════════════════════════════════════════════ -->
+  <nav id="tab-bar" class="flex bg-bg border-b border-border px-4" style="gap:2px;">
+    <button class="tab-btn active" data-tab="0"
+      style="padding:6px 16px; font-size:11px; font-family:inherit; border:1px solid transparent; border-bottom:none; border-radius:3px 3px 0 0; cursor:pointer; background:transparent; color:var(--dim); transition:color .15s,background .15s; letter-spacing:.05em;">⏺ GHI</button>
+    <button class="tab-btn" data-tab="1"
+      style="padding:6px 16px; font-size:11px; font-family:inherit; border:1px solid transparent; border-bottom:none; border-radius:3px 3px 0 0; cursor:pointer; background:transparent; color:var(--dim); transition:color .15s,background .15s; letter-spacing:.05em;">⚙ CÀI ĐẶT</button>
+    <button class="tab-btn" data-tab="2"
+      style="padding:6px 16px; font-size:11px; font-family:inherit; border:1px solid transparent; border-bottom:none; border-radius:3px 3px 0 0; cursor:pointer; background:transparent; color:var(--dim); transition:color .15s,background .15s; letter-spacing:.05em;">📁 FILE</button>
+  </nav>
+
   <!-- ══ MAIN ════════════════════════════════════════════════════════ -->
-  <main>
+  <main style="overflow:hidden; display:flex; flex-direction:column;">
 
-    <!-- Display selector -->
-    <section id="display-selector" aria-label="Chọn màn hình ghi">
-      <h2 class="section-title">🖥 CHỌN MÀN HÌNH</h2>
-      <div id="display-grid" class="display-grid">
-        <div class="display-card-loading">Đang tải danh sách màn hình…</div>
+    <!-- ══ TAB 0: GHI ═══════════════════════════════════════════════ -->
+    <div id="tab-panel-0" class="tab-panel active"
+         style="flex-direction:column; gap:0; padding:16px; max-width:900px; width:100%; margin:0 auto; box-sizing:border-box; overflow-y:auto;">
+
+      <!-- ROW A: Display selector + Controls side-by-side -->
+      <div style="display:grid; grid-template-columns:1fr auto; gap:16px; align-items:start; margin-bottom:14px;">
+
+        <!-- Display selector -->
+        <section id="display-selector" aria-label="Chọn màn hình ghi">
+          <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
+            🖥 CHỌN MÀN HÌNH
+          </h2>
+          <div id="display-grid" class="display-grid flex gap-2.5 flex-wrap mb-2">
+            <div class="display-card-loading text-dim italic text-xs py-3">Đang tải…</div>
+          </div>
+          <button id="refresh-previews"
+            class="btn-secondary font-mono text-[10px] px-2.5 py-1 rounded border border-border bg-transparent text-dim cursor-pointer transition-all hover:border-[#444] hover:text-accent hover:bg-bg3">
+            ↺ Làm mới
+          </button>
+        </section>
+
+        <!-- Controls -->
+        <section id="controls" aria-label="Điều khiển ghi" style="text-align:center; padding-top:4px;">
+          <div class="controls-center flex flex-col items-center gap-3">
+            <button id="rec-button"
+              class="rec-button w-[88px] h-[88px] rounded-full border-[3px] border-red bg-transparent text-red font-mono text-[12px] font-bold tracking-[0.1em] cursor-pointer flex flex-col items-center justify-center gap-1 transition-all outline-none hover:bg-red/[0.08] hover:shadow-[0_0_16px_rgba(255,60,60,0.3)]"
+              aria-label="Bắt đầu ghi">
+              <span class="rec-icon text-[24px] leading-none">●</span>
+              <span id="rec-label" class="rec-label">GHI</span>
+            </button>
+            <div id="timer" class="timer text-3xl font-bold tracking-[0.08em] text-accent tabular-nums" aria-live="polite">00:00:00</div>
+            <div id="recording-display-label" class="recording-display-label hidden text-red text-[0.75rem] font-mono"></div>
+          </div>
+        </section>
       </div>
-      <button id="refresh-previews" class="btn-secondary">↺ Làm mới xem trước</button>
-    </section>
 
-    <!-- Record controls -->
-    <section id="controls" aria-label="Điều khiển ghi">
-      <div class="controls-center">
-        <button id="rec-button" class="rec-button" aria-label="Bắt đầu ghi">
-          <span class="rec-icon">●</span>
-          <span id="rec-label" class="rec-label">GHI</span>
-        </button>
-        <div id="timer" class="timer" aria-live="polite">00:00:00</div>
-        <div id="recording-display-label" class="recording-display-label hidden"></div>
-      </div>
-    </section>
+      <!-- Divider -->
+      <div style="height:1px; background:#252525; margin-bottom:12px;"></div>
 
-    <!-- Job progress -->
-    <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
-      <h2 class="section-title">⚡ XỬ LÝ — CHI TIẾT</h2>
-      <div class="step-indicator" id="step-indicator">Bước — / —</div>
-      <div id="log-container" class="log-container">
-        <div class="log-entry">⏳ Bắt đầu xử lý...</div>
-      </div>
-    </section>
-
-    <!-- Audio meters -->
-    <section id="meters" aria-label="Mức âm thanh">
-      <h2 class="section-title">♬ MỨC ÂM THANH</h2>
-      <div class="meter-row">
-        <span class="meter-label">🎤 Mic</span>
-        <div class="level-bar-track">
-          <div id="mic-bar" class="level-bar" style="width:0%"></div>
+      <!-- ROW B: Audio meters -->
+      <section id="meters" aria-label="Mức âm thanh" style="margin-bottom:12px;">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
+          ♬ MỨC ÂM THANH
+        </h2>
+        <div class="meter-row flex items-center gap-3 mb-2">
+          <span class="meter-label w-[52px] text-[10px] font-bold tracking-[0.08em] text-dim shrink-0">🎤 Mic</span>
+          <div class="level-bar-track flex-1 h-1.5 bg-[#222] rounded border border-[#2a2a2a] overflow-hidden">
+            <div id="mic-bar" class="level-bar h-full bg-green rounded transition-[width] duration-75" style="width:0%"></div>
+          </div>
+          <span id="mic-db" class="meter-db w-[52px] text-right text-[10px] text-dim shrink-0 tabular-nums">–∞</span>
         </div>
-        <span id="mic-db" class="meter-db">–∞</span>
-      </div>
-      <div class="meter-row">
-        <span class="meter-label">🔊 Loa</span>
-        <div class="level-bar-track">
-          <div id="spk-bar" class="level-bar" style="width:0%"></div>
+        <div class="meter-row flex items-center gap-3">
+          <span class="meter-label w-[52px] text-[10px] font-bold tracking-[0.08em] text-dim shrink-0">🔊 Loa</span>
+          <div class="level-bar-track flex-1 h-1.5 bg-[#222] rounded border border-[#2a2a2a] overflow-hidden">
+            <div id="spk-bar" class="level-bar h-full bg-green rounded transition-[width] duration-75" style="width:0%"></div>
+          </div>
+          <span id="spk-db" class="meter-db w-[52px] text-right text-[10px] text-dim shrink-0 tabular-nums">–∞</span>
         </div>
-        <span id="spk-db" class="meter-db">–∞</span>
-      </div>
-    </section>
+      </section>
 
-    <!-- Options -->
-    <section id="options" aria-label="Tùy chọn đầu ra">
-      <details>
-        <summary class="section-title" style="cursor:pointer; outline:none; list-style-position: inside; user-select:none;">⚙ TÙY CHỌN</summary>
-        <div class="options-grid" style="padding-top:10px;">
-        <label class="option-row" for="opt-merge">
-          <span class="option-toggle-wrap">
-            <input type="checkbox" id="opt-merge" class="option-checkbox" {% if config.merge_audio_default %}checked{% endif %} />
-            <span class="toggle-track"><span class="toggle-thumb"></span></span>
-          </span>
-          <span class="option-text">
-            Ghép audio vào video (.mp4)
-            <span class="tooltip" data-tip="Tạo file video có âm thanh mic + loa hoàn chỉnh.">?</span>
-          </span>
-        </label>
-        <label class="option-row" for="opt-mp3">
-          <span class="option-toggle-wrap">
-            <input type="checkbox" id="opt-mp3" class="option-checkbox" {% if config.convert_mp3_default %}checked{% endif %} />
-            <span class="toggle-track"><span class="toggle-thumb"></span></span>
-          </span>
-          <span class="option-text">
-            Xuất audio riêng (.mp3)
-            <span class="tooltip" data-tip="Tạo thêm file MP3 192kbps từ mic + loa.">?</span>
-          </span>
-        </label>
+      <!-- Divider -->
+      <div style="height:1px; background:#252525; margin-bottom:12px;"></div>
 
-        <!-- Khuếch đại âm thanh -->
-        <div class="option-row" style="cursor:default; flex-direction:column; align-items:flex-start; gap:10px;">
-          <span class="option-text" style="font-weight:700; letter-spacing:.06em;">
-            📈 KHUẾCH ĐẠI ÂM THANH
-            <span class="tooltip" data-tip="Nhân âm lượng khi xuất file. 2× = gấp đôi, 3× = gấp ba. Hiệu quả với mic hoặc cuộc họi bị nhỏ tiếng.">?</span>
-          </span>
-          <div style="display:flex; gap:20px; flex-wrap:wrap;">
-            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-              🎤 Mic
-              <select id="opt-mic-gain" class="test-select">
-                <option value="1">1× (mặc định)</option>
-                <option value="2">2× khuếch đại</option>
-                <option value="3">3× khuếch đại</option>
-              </select>
+      <!-- ROW C: Inline quick options -->
+      <section style="margin-bottom:12px;">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
+          ⚙ TÙY CHỌN NHANH
+        </h2>
+        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+          <label class="flex items-center gap-2 cursor-pointer" for="opt-merge">
+            <span class="option-toggle-wrap relative shrink-0">
+              <input type="checkbox" id="opt-merge" class="option-checkbox" {% if config.merge_audio_default %}checked{% endif %} />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </span>
+            <span class="text-[12px] text-dim">Ghép .mp4</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer" for="opt-mp3">
+            <span class="option-toggle-wrap relative shrink-0">
+              <input type="checkbox" id="opt-mp3" class="option-checkbox" {% if config.convert_mp3_default %}checked{% endif %} />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </span>
+            <span class="text-[12px] text-dim">Xuất .mp3</span>
+          </label>
+          <span style="color:#333; font-size:14px;">|</span>
+          <label class="flex items-center gap-1.5 text-[12px] text-dim">
+            🎤
+            <select id="opt-mic-gain" class="test-select bg-[#111] text-[#aaa] border border-[#333] rounded-sm px-1.5 py-1 font-mono text-[11px] cursor-pointer">
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+            </select>
+          </label>
+          <label class="flex items-center gap-1.5 text-[12px] text-dim">
+            🔊
+            <select id="opt-spk-gain" class="test-select bg-[#111] text-[#aaa] border border-[#333] rounded-sm px-1.5 py-1 font-mono text-[11px] cursor-pointer">
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <!-- ROW D: Job progress (hidden by default) -->
+      <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
+          ⚡ XỬ LÝ — CHI TIẾT
+        </h2>
+        <div class="step-indicator bg-green/10 border border-green text-green px-3 py-1.5 rounded font-bold text-[12px] text-center mb-2 tracking-[0.05em]"
+             id="step-indicator">Bước — / —</div>
+        <div id="log-container"
+             class="log-container bg-bg3 text-[#e0e0e0] rounded-md p-2 overflow-y-auto font-mono text-[11px] leading-relaxed border border-border"
+             style="max-height:160px;">
+          <div class="log-entry">⏳ Bắt đầu xử lý...</div>
+        </div>
+      </section>
+
+    </div><!-- /tab-panel-0 -->
+
+
+    <!-- ══ TAB 1: CÀI ĐẶT ══════════════════════════════════════════ -->
+    <div id="tab-panel-1" class="tab-panel"
+         style="flex-direction:column; padding:16px; overflow-y:auto; max-width:900px; width:100%; margin:0 auto;">
+
+      <!-- Manual Merge -->
+      <section id="manual-merge" aria-label="Ghép file thủ công" style="margin-bottom:20px;">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-3 border-b border-border pb-1.5">
+          🔀 GHÉP FILE THỦ CÔNG
+        </h2>
+        <div class="merge-grid flex flex-col gap-2.5">
+          <div class="merge-row flex items-center gap-3 flex-wrap">
+            <label class="merge-label min-w-[160px] text-xs text-dim shrink-0">🎬 Video (.mp4)</label>
+            <select id="sel-merge-video" class="merge-select flex-1 min-w-[200px] max-w-[400px] bg-bg2 text-accent border border-border rounded px-2.5 py-1.5 font-mono text-xs cursor-pointer transition-colors hover:border-[#444] outline-none">
+              <option value="">— Chọn file video —</option>
+            </select>
+          </div>
+          <div class="merge-row flex items-center gap-3 flex-wrap">
+            <label class="merge-label min-w-[160px] text-xs text-dim shrink-0">🎵 Audio (.mp3/.wav)</label>
+            <select id="sel-merge-audio" class="merge-select flex-1 min-w-[200px] max-w-[400px] bg-bg2 text-accent border border-border rounded px-2.5 py-1.5 font-mono text-xs cursor-pointer transition-colors hover:border-[#444] outline-none">
+              <option value="">— Chọn file audio —</option>
+            </select>
+          </div>
+          <div class="merge-row flex items-center gap-3 flex-wrap">
+            <label class="merge-label min-w-[160px] text-xs text-dim shrink-0 flex items-center gap-1.5">
+              ⏱ Offset audio (ms)
+              <span class="tooltip" data-tip="Dương (+): làm audio trễ hơn. Âm (−): đẩy audio sớm hơn.">?</span>
             </label>
-            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-              🔊 Loa
-              <select id="opt-spk-gain" class="test-select">
-                <option value="1">1× (mặc định)</option>
-                <option value="2">2× khuếch đại</option>
-                <option value="3">3× khuếch đại</option>
-              </select>
-            </label>
+            <input type="number" id="inp-merge-offset"
+              class="merge-offset-input w-[90px] bg-bg2 text-accent border border-border rounded px-2.5 py-1.5 font-mono text-xs text-right focus:border-[#444] outline-none"
+              value="0" step="100" />
+            <span class="text-[11px] text-dim">ms</span>
+          </div>
+          <div class="merge-row flex items-center gap-3">
+            <button id="btn-manual-merge"
+              class="btn-merge font-mono text-xs font-bold tracking-[0.1em] px-5 py-2 rounded border border-yellow bg-yellow/[0.08] text-yellow cursor-pointer transition-all hover:bg-yellow/[0.18] disabled:opacity-40 disabled:cursor-not-allowed">
+              ⚡ GHÉP FILE
+            </button>
+            <span id="merge-status" class="text-[11px] text-dim italic"></span>
           </div>
         </div>
-      </div>
-      </details>
-    </section>
+      </section>
 
-    <!-- Test / Simulate Panel — collapsible -->
-    <section id="test-panel">
+      <!-- Options note -->
+      <section aria-label="Tùy chọn">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-3 border-b border-border pb-1.5">
+          ⚙ TÙY CHỌN ĐẦU RA
+        </h2>
+        <p class="text-[12px] text-dim italic px-1">Dùng thanh <strong class="text-[#888]">Tùy chọn nhanh</strong> ở tab <strong class="text-[#888]">⏺ GHI</strong> để bật/tắt ghép MP4, xuất MP3 và điều chỉnh khuếch đại âm thanh.</p>
+      </section>
+
+    </div><!-- /tab-panel-1 -->
+
+
+    <!-- ══ TAB 2: FILE ══════════════════════════════════════════════ -->
+    <div id="tab-panel-2" class="tab-panel"
+         style="flex-direction:column; padding:16px; overflow:hidden; max-width:900px; width:100%; margin:0 auto;">
+
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-0 border-b-0 pb-0">
+          📁 FILE ĐÃ GHI
+        </h2>
+        <button id="open-folder-btn"
+          class="btn-secondary font-mono text-[11px] px-3 py-1.5 rounded border border-border bg-transparent text-dim cursor-pointer transition-all hover:border-[#444] hover:text-accent hover:bg-bg3">
+          Mở thư mục
+        </button>
+      </div>
+
+      <div style="flex:1; overflow-y:auto; min-height:0;">
+        <table id="files-table" class="file-table w-full border-collapse text-xs">
+          <thead style="position:sticky; top:0; background:#0d0d0d; z-index:1;">
+            <tr>
+              <th class="text-left px-2.5 py-2 text-[10px] tracking-[0.15em] uppercase text-dim border-b border-border">Tên file</th>
+              <th class="text-left px-2.5 py-2 text-[10px] tracking-[0.15em] uppercase text-dim border-b border-border">Loại</th>
+              <th class="text-left px-2.5 py-2 text-[10px] tracking-[0.15em] uppercase text-dim border-b border-border">Kích thước</th>
+              <th class="text-left px-2.5 py-2 text-[10px] tracking-[0.15em] uppercase text-dim border-b border-border">Thời điểm</th>
+              <th class="px-2.5 py-2 border-b border-border"></th>
+            </tr>
+          </thead>
+          <tbody id="files-tbody"></tbody>
+        </table>
+        <div id="files-empty" class="hidden text-center text-dim italic py-8">Chưa có file nào.</div>
+      </div>
+
+    </div><!-- /tab-panel-2 -->
+
+    <!-- ══ TEST PANEL (hidden) ══════════════════════════════════════ -->
+    <section id="test-panel" class="border border-[#2a2a2a] rounded overflow-hidden"
+             style="position:absolute; visibility:hidden; pointer-events:none;">
       <details>
-        <summary class="test-panel-header">
+        <summary class="test-panel-header px-3.5 py-2.5 cursor-pointer font-mono text-[0.85rem] text-[#555] bg-bg flex items-center gap-2 select-none transition-colors hover:text-[#888] hover:bg-[#111]">
           🧪 Kiểm tra &amp; Mô phỏng
-          <span class="test-panel-badge">DEV</span>
+          <span class="test-panel-badge text-[0.6rem] bg-[#2a2a00] text-[#888800] border border-[#444400] rounded-sm px-1.5 py-px tracking-[0.1em]">DEV</span>
         </summary>
-        <div class="test-panel-body">
+        <div class="test-panel-body p-3.5 bg-[#0a0a0a] flex flex-col gap-3">
 
           <!-- Row 1: Simulate call start/end -->
-          <div class="test-row">
-            <label class="test-label">Giả lập cuộc gọi đến:</label>
-            <div class="test-controls">
-              <select id="sim-app-select" class="test-select">
+          <div class="test-row flex items-center gap-2.5 flex-wrap">
+            <label class="test-label font-mono text-[0.8rem] text-[#555] min-w-[160px] shrink-0">Giả lập cuộc gọi đến:</label>
+            <div class="test-controls flex items-center gap-2 flex-wrap">
+              <select id="sim-app-select" class="test-select bg-[#111] text-[#aaa] border border-[#333] rounded-sm px-2 py-1.5 font-mono text-[0.85rem] cursor-pointer">
                 <option value="Zoom">🎥 Zoom</option>
                 <option value="Microsoft Teams">💼 Microsoft Teams</option>
                 <option value="Google Meet">📹 Google Meet</option>
               </select>
-              <button id="btn-sim-start" class="btn-test-start">▶ Bắt đầu giả lập</button>
-              <button id="btn-sim-end" class="btn-test-end" disabled>■ Kết thúc giả lập</button>
+              <button id="btn-sim-start" class="btn-test-start bg-[#1a3a1a] text-green border border-[#2a5a2a] rounded-sm px-3.5 py-1 font-mono text-[0.8rem] cursor-pointer transition-colors hover:bg-[#224422] disabled:opacity-30 disabled:cursor-not-allowed">▶ Bắt đầu giả lập</button>
+              <button id="btn-sim-end" class="btn-test-end bg-[#3a1a1a] text-red border border-[#5a2a2a] rounded-sm px-3.5 py-1 font-mono text-[0.8rem] cursor-pointer transition-colors hover:bg-[#442222] disabled:opacity-30 disabled:cursor-not-allowed" disabled>■ Kết thúc giả lập</button>
             </div>
           </div>
 
           <!-- Row 2: Detection method status -->
-          <div class="test-row">
-            <label class="test-label">Trạng thái phát hiện:</label>
-            <div id="detection-status-display" class="detection-status">
-              <span class="det-method">A (Process+Title): <span id="det-a">–</span></span>
-              <span class="det-method">B (Audio WASAPI): <span id="det-b">–</span></span>
-              <span class="det-method">C (WinRT API): <span id="det-c">–</span></span>
-              <span class="det-confidence">Độ tin cậy: <span id="det-conf">–</span></span>
+          <div class="test-row flex items-center gap-2.5 flex-wrap">
+            <label class="test-label font-mono text-[0.8rem] text-[#555] min-w-[160px] shrink-0">Trạng thái phát hiện:</label>
+            <div id="detection-status-display" class="detection-status flex items-center gap-3 flex-wrap text-[0.8rem]">
+              <span class="det-method text-[#555]">A (Process+Title): <span id="det-a">–</span></span>
+              <span class="det-method text-[#555]">B (Audio WASAPI): <span id="det-b">–</span></span>
+              <span class="det-method text-[#555]">C (WinRT API): <span id="det-c">–</span></span>
+              <span class="det-confidence text-[#555]">Độ tin cậy: <span id="det-conf">–</span></span>
             </div>
           </div>
 
           <!-- Row 3: Last detected app -->
-          <div class="test-row">
-            <label class="test-label">Phát hiện gần nhất:</label>
-            <span id="last-detected-app" class="last-detected">Chưa có</span>
-            <span id="detection-time" class="detection-time"></span>
+          <div class="test-row flex items-center gap-2.5 flex-wrap">
+            <label class="test-label font-mono text-[0.8rem] text-[#555] min-w-[160px] shrink-0">Phát hiện gần nhất:</label>
+            <span id="last-detected-app" class="last-detected text-[#888] text-[0.8rem]">Chưa có</span>
+            <span id="detection-time" class="detection-time text-[#555] text-[0.75rem]"></span>
           </div>
 
         </div>
-      </details>
-    </section>
-
-    
-
-    
-
-    <!-- Manual Merge -->
-    <section id="manual-merge" aria-label="Ghép file thủ công">
-      <details>
-        <summary class="section-title" style="cursor:pointer; outline:none; list-style-position: inside; user-select:none;">🔀 GHÉP FILE THỦ CÔNG</summary>
-        <div class="merge-grid" style="padding-top:10px;">
-        <div class="merge-row">
-          <label class="merge-label">🎬 Video (.mp4)</label>
-          <select id="sel-merge-video" class="merge-select">
-            <option value="">— Chọn file video —</option>
-          </select>
-        </div>
-        <div class="merge-row">
-          <label class="merge-label">🎵 Audio (.mp3 / .wav)</label>
-          <select id="sel-merge-audio" class="merge-select">
-            <option value="">— Chọn file audio —</option>
-          </select>
-        </div>
-        <div class="merge-row">
-          <label class="merge-label">⏱ Offset audio (ms)
-            <span class="tooltip" data-tip="Dương (+): làm audio trễ hơn so với video. Âm (−): đẩy audio sớm hơn.">?</span>
-          </label>
-          <input type="number" id="inp-merge-offset" class="merge-offset-input" value="0" step="100" />
-          <span class="merge-offset-hint">ms</span>
-        </div>
-        <div class="merge-row">
-          <button id="btn-manual-merge" class="btn-merge">⚡ GHÉP FILE</button>
-          <span id="merge-status" class="merge-status"></span>
-        </div>
-      </div>
-      </details>
-    </section>
-
-    <!-- Files -->
-    <section id="files" aria-label="File đã ghi">
-      <details>
-        <summary style="cursor:pointer; outline:none; user-select:none;">
-          <div class="files-header" style="display:inline-flex; align-items:center; width:calc(100% - 20px); justify-content:space-between; margin-bottom:0;">
-            <h2 class="section-title" style="margin:0; display:inline-block;">📁 FILE ĐÃ GHI</h2>
-            <button id="open-folder-btn" class="btn-secondary" onclick="event.stopPropagation();">Mở thư mục</button>
-          </div>
-        </summary>
-        <div style="padding-top:15px;">
-      <table id="files-table" class="file-table">
-        <thead>
-          <tr>
-            <th>Tên file</th><th>Loại</th><th>Kích thước</th><th>Thời điểm</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="files-tbody"></tbody>
-      </table>
-      <div id="files-empty" class="no-files hidden">Chưa có file nào.</div>
-      </div>
       </details>
     </section>
 
   </main>
 
   <!-- ══ FOOTER ══════════════════════════════════════════════════════ -->
-  <footer>
-    <div class="footer-inner">
-      <span class="output-path">📂 <code id="output-path-txt">{{ output_dir }}</code></span>
-      <span id="detector-status">🔍 Giám sát: Tắt</span>
+  <footer class="border-t border-border bg-bg2 px-6 py-3">
+    <div class="footer-inner max-w-[900px] mx-auto flex items-center justify-between gap-3 flex-wrap">
+      <span class="output-path text-[11px] text-dim">📂 <code class="text-green font-mono" id="output-path-txt">{{ output_dir }}</code></span>
+      <span id="detector-status" class="text-[#555] text-[0.75rem] font-mono">🔍 Giám sát: Tắt</span>
     </div>
   </footer>
 
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script>
+  (function () {
+    var tabs   = document.querySelectorAll('.tab-btn');
+    var panels = document.querySelectorAll('.tab-panel');
+    function switchTab(idx) {
+      tabs.forEach(function (t, i) { t.classList.toggle('active', i === idx); });
+      panels.forEach(function (p, i) { p.classList.toggle('active', i === idx); });
+    }
+    tabs.forEach(function (btn, i) { btn.addEventListener('click', function () { switchTab(i); }); });
+  })();
+  </script>
 </body>
 </html>
