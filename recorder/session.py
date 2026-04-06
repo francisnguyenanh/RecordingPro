@@ -158,6 +158,113 @@ def _find_ffmpeg() -> str:
     )
 
 
+def _get_media_duration(ffmpeg: str, file_path: str) -> float:
+    """Lấy duration (giây) của file media bằng cách đọc header FFmpeg."""
+    import re
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-v", "error", "-i", str(file_path)],
+            capture_output=True, timeout=30, **_POPEN_FLAGS
+        )
+        stderr = proc.stderr.decode(errors="replace")
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", stderr)
+        if m:
+            h, mn, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
+            return h * 3600 + mn * 60 + s
+    except Exception as exc:
+        logger.debug("[Duration] Lỗi lấy duration %s: %s", file_path, exc)
+    return 0.0
+
+
+def _apply_drift_correction(
+    ffmpeg: str,
+    video_path: str,
+    mic_wav: Optional[str],
+    spk_wav: Optional[str],
+    out_dir: Path,
+) -> tuple[str, Optional[str], Optional[str]]:
+    """
+    Đo drift thực tế giữa video và audio rồi chia sai số 50-50:
+    - Video: setpts để kéo dài/rút ngắn timestamp
+    - Audio: atempo để tăng/giảm tốc độ phát
+    Trả về (video_path, mic_wav, spk_wav) — có thể là path mới hoặc gốc nếu không cần sửa.
+    """
+    audio_ref = mic_wav if mic_wav and Path(mic_wav).exists() else spk_wav
+    if not audio_ref:
+        return video_path, mic_wav, spk_wav
+
+    video_dur = _get_media_duration(ffmpeg, video_path)
+    audio_dur = _get_media_duration(ffmpeg, audio_ref)
+
+    if video_dur <= 0 or audio_dur <= 0:
+        logger.warning("[DriftCorrection] Không lấy được duration, bỏ qua correction.")
+        return video_path, mic_wav, spk_wav
+
+    drift_ms = (video_dur - audio_dur) * 1000
+    logger.info(
+        "[DriftCorrection] Video=%.3fs, Audio=%.3fs, Drift=%.1fms",
+        video_dur, audio_dur, drift_ms,
+    )
+
+    if abs(drift_ms) < 50:
+        logger.debug("[DriftCorrection] Drift=%.1fms < 50ms, không cần sửa.", drift_ms)
+        return video_path, mic_wav, spk_wav
+
+    # Tính tốc độ mục tiêu (midpoint 50-50)
+    t_mid = (video_dur + audio_dur) / 2.0
+    pts_mult = t_mid / video_dur      # > 1 = slow video down, < 1 = speed up
+    atempo = audio_dur / t_mid         # > 1 = speed audio up, < 1 = slow down
+
+    # Clamp atempo vào [0.5, 2.0] (giới hạn của FFmpeg atempo filter)
+    atempo = max(0.5, min(2.0, atempo))
+    pts_mult = max(0.5, min(2.0, pts_mult))
+
+    logger.info(
+        "[DriftCorrection] Applying: video_pts_mult=%.4f, audio_atempo=%.4f",
+        pts_mult, atempo,
+    )
+
+    stem_v = Path(video_path).stem
+    video_corrected = str(out_dir / f"{stem_v}_dc.mp4")
+
+    cmd_v = [
+        ffmpeg, "-y", "-i", str(video_path),
+        "-filter:v", f"setpts={pts_mult:.6f}*PTS",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30",
+        "-an",
+        video_corrected,
+    ]
+    proc_v = subprocess.run(cmd_v, capture_output=True, **_POPEN_FLAGS)
+    if proc_v.returncode != 0:
+        err = proc_v.stderr.decode(errors="replace")[-200:]
+        logger.error("[DriftCorrection] Video correction failed: %s", err)
+        return video_path, mic_wav, spk_wav
+
+    def _correct_audio(wav_path: Optional[str]) -> Optional[str]:
+        if not wav_path or not Path(wav_path).exists():
+            return wav_path
+        stem_a = Path(wav_path).stem
+        corrected = str(out_dir / f"{stem_a}_dc.wav")
+        cmd_a = [
+            ffmpeg, "-y", "-i", str(wav_path),
+            "-filter:a", f"atempo={atempo:.4f}",
+            "-c:a", "pcm_s16le",
+            corrected,
+        ]
+        proc_a = subprocess.run(cmd_a, capture_output=True, **_POPEN_FLAGS)
+        if proc_a.returncode != 0:
+            err = proc_a.stderr.decode(errors="replace")[-200:]
+            logger.error("[DriftCorrection] Audio correction failed: %s", err)
+            return wav_path
+        return corrected
+
+    new_mic = _correct_audio(mic_wav)
+    new_spk = _correct_audio(spk_wav)
+
+    logger.info("[DriftCorrection] ✅ Correction applied: drift=%.1fms", drift_ms)
+    return video_corrected, new_mic, new_spk
+
+
 def _concat_video_segments(ffmpeg: str, session_id: str, paths: list[str], output_dir: Path = None) -> str:
     """Nối nhiều segment video thành một file bằng FFmpeg concat demuxer."""
     out_dir = output_dir or OUTPUT_DIR
@@ -250,6 +357,23 @@ def _post_process(
                                 "message": "❌ Không có file video.", "log_type": "error",
                                 "current_step": 0, "total_steps": 0})
         return result
+
+    # ── Drift Correction: Đo và chia sai số AV 50-50 ─────────────────
+    if merge_audio and (has_mic or has_spk):
+        _emit("job_progress", {
+            "job_id": session_id, "stage": "info",
+            "message": "⚖️ Đang đo và hiệu chỉnh AV drift...", "log_type": "info",
+            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
+        })
+        orig_mic, orig_spk = mic_wav, spk_wav
+        video_path, mic_wav, spk_wav = _apply_drift_correction(
+            ffmpeg, video_path,
+            mic_wav if has_mic else None,
+            spk_wav if has_spk else None,
+            out_dir,
+        )
+        has_mic = mic_wav is not None and Path(mic_wav).exists()
+        has_spk = spk_wav is not None and Path(spk_wav).exists()
 
     # ── Build lệnh ghép audio vào video ───────────────────────────────
     merged_path: Optional[str] = None

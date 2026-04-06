@@ -111,6 +111,7 @@ class VideoEngine:
             camera.start(target_fps=TARGET_FPS)
 
             first_frame = True
+            next_deadline: float = 0.0
             while self.recording and self._pending_display is None:
                 frame = camera.get_latest_frame()
                 if frame is None:
@@ -123,16 +124,19 @@ class VideoEngine:
                     writer = cv2.VideoWriter(str(path), fourcc, TARGET_FPS, (w, h))
                     if seg_idx == 0:
                         self.start_timestamp = time.perf_counter()
+                    # Anchor deadline to wall clock from first frame
+                    next_deadline = time.perf_counter()
                     first_frame = False
 
-                t_start = time.perf_counter()
                 writer.write(frame)
                 self.frame_count += 1
-                elapsed = time.perf_counter() - t_start
-                sleep_t = FRAME_INTERVAL - elapsed
+                next_deadline += FRAME_INTERVAL
+                sleep_t = next_deadline - time.perf_counter()
                 if sleep_t > 0:
                     time.sleep(sleep_t)
-
+                elif sleep_t < -FRAME_INTERVAL:
+                    # Bị lag quá 1 frame → reset deadline tránh catch-up vô hạn
+                    next_deadline = time.perf_counter()
             camera.stop()
             del camera
             logger.info(
@@ -181,19 +185,22 @@ class VideoEngine:
                 if seg_idx == 0:
                     self.start_timestamp = time.perf_counter()
 
+                # Anchor deadline đến wall clock để tránh tích lũy drift
+                next_deadline = time.perf_counter()
                 while self.recording and self._pending_display is None:
-                    t_start = time.perf_counter()
-
                     img = sct.grab(monitor)
                     frame = np.array(img, dtype=np.uint8)
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
                     writer.write(frame)
                     self.frame_count += 1
 
-                    elapsed = time.perf_counter() - t_start
-                    sleep_t = FRAME_INTERVAL - elapsed
+                    next_deadline += FRAME_INTERVAL
+                    sleep_t = next_deadline - time.perf_counter()
                     if sleep_t > 0:
                         time.sleep(sleep_t)
+                    elif sleep_t < -FRAME_INTERVAL:
+                        # Bị lag quá 1 frame → reset deadline tránh catch-up vô hạn
+                        next_deadline = time.perf_counter()
 
             logger.info(
                 "[VideoEngine] mss segment %d: display=#%d, frames=%d",
