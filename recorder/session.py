@@ -72,7 +72,8 @@ class RecordingSession:
 
     # ------------------------------------------------------------------
     def stop(self, merge_audio: bool = True, convert_mp3: bool = True,
-             mic_gain: float = 1.0, speaker_gain: float = 1.0) -> dict:
+             mic_gain: float = 1.0, speaker_gain: float = 1.0,
+             current_step_ref: dict = None) -> dict:
         """Dừng video → đợi 50ms → dừng audio → hậu xử lý."""
         video_paths = self.video.stop()   # 1. Video trước (list of segment paths)
         time.sleep(0.05)                  # 2. Đợi
@@ -89,6 +90,7 @@ class RecordingSession:
             offset_ms=self.sync_offset_ms,
             mic_gain=mic_gain,
             speaker_gain=speaker_gain,
+            current_step_ref=current_step_ref,
         )
 
 
@@ -154,7 +156,11 @@ def _post_process(
     offset_ms: float,
     mic_gain: float = 1.0,
     speaker_gain: float = 1.0,
+    current_step_ref: dict = None,
 ) -> dict:
+    if current_step_ref is None:
+        current_step_ref = {"step": 3, "total": 3}
+    
     result = {"video": None, "audio_mp3": None, "merged": None}
     ffmpeg = _find_ffmpeg()
     mic_wav: Optional[str] = audio_paths.get("mic")
@@ -170,15 +176,19 @@ def _post_process(
     # ── Bước 0: Nối segment nếu có chuyển màn hình ────────────────────
     valid_paths = [p for p in video_paths if Path(p).exists()]
     if len(valid_paths) > 1:
+        current_step_ref["step"] += 1
         _emit("job_progress", {
-            "job_id": session_id, "stage": "concat",
-            "message": f"Đang nối {len(valid_paths)} segment video...", "percent": 5,
+            "job_id": session_id, "stage": "info",
+            "message": f"🔗 Đang nối {len(valid_paths)} segment video...", "log_type": "info",
+            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
         })
         video_path = _concat_video_segments(ffmpeg, session_id, valid_paths)
     elif valid_paths:
+        current_step_ref["step"] += 1
         _emit("job_progress", {
-            "job_id": session_id, "stage": "saving",
-            "message": "Đang lưu và hoàn thiện file video...", "percent": 10,
+            "job_id": session_id, "stage": "info",
+            "message": "💾 Đang lưu và hoàn thiện file video...", "log_type": "info",
+            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
         })
         # Rename single segment to canonical name
         canonical = str(OUTPUT_DIR / f"{session_id}_video.mp4")
@@ -188,15 +198,18 @@ def _post_process(
     else:
         logger.error("[PostProcess] Không có file video nào tồn tại.")
         _emit("job_progress", {"job_id": session_id, "stage": "error",
-                                "message": "Không có file video.", "percent": 0})
+                                "message": "❌ Không có file video.", "log_type": "error",
+                                "current_step": 0, "total_steps": 0})
         return result
 
     # ── Bước A: Ghép audio vào video ──────────────────────────────────
     merged_path: Optional[str] = None
     if merge_audio and (has_mic or has_spk):
+        current_step_ref["step"] += 1
         _emit("job_progress", {
-            "job_id": session_id, "stage": "merging",
-            "message": "Đang trộn audio vào video...", "percent": 10
+            "job_id": session_id, "stage": "info",
+            "message": "🎬 Đang trộn audio vào video...", "log_type": "info",
+            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
         })
         merged_path = str(OUTPUT_DIR / f"{session_id}_final.mp4")
         cmd = [ffmpeg, "-y", "-i", video_path]
@@ -235,21 +248,25 @@ def _post_process(
             merged_path,
         ]
 
-        _emit("job_progress", {"job_id": session_id, "stage": "merging",
-                                "message": "FFmpeg đang ghép...", "percent": 30})
+        _emit("job_progress", {"job_id": session_id, "stage": "info",
+                                "message": "⚙️ FFmpeg đang ghép...", "log_type": "info",
+                                "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
         proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
         if proc.returncode == 0:
             result["merged"] = merged_path
-            _emit("job_progress", {"job_id": session_id, "stage": "merging",
-                                    "message": "Ghép video hoàn tất!", "percent": 60})
+            _emit("job_progress", {"job_id": session_id, "stage": "info",
+                                    "message": "✅ Ghép video hoàn tất!", "log_type": "success",
+                                    "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
         else:
             logger.error("[PostProcess] ffmpeg merge lỗi:\n%s", proc.stderr.decode(errors="replace"))
             merged_path = None
 
     # ── Bước B: Chuyển audio sang MP3 ─────────────────────────────────
     if convert_mp3 and (has_mic or has_spk):
-        _emit("job_progress", {"job_id": session_id, "stage": "converting",
-                                "message": "Đang chuyển đổi sang MP3...", "percent": 70})
+        current_step_ref["step"] += 1
+        _emit("job_progress", {"job_id": session_id, "stage": "info",
+                                "message": "🎵 Đang chuyển đổi sang MP3...", "log_type": "info",
+                                "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
         mp3_path = str(OUTPUT_DIR / f"{session_id}_audio.mp3")
         cmd_mp3 = [ffmpeg, "-y"]
         if has_mic:
@@ -272,8 +289,9 @@ def _post_process(
         proc_mp3 = subprocess.run(cmd_mp3, capture_output=True, **_POPEN_FLAGS)
         if proc_mp3.returncode == 0:
             result["audio_mp3"] = mp3_path
-            _emit("job_progress", {"job_id": session_id, "stage": "converting",
-                                    "message": "Chuyển MP3 hoàn tất!", "percent": 90})
+            _emit("job_progress", {"job_id": session_id, "stage": "info",
+                                    "message": "✅ Chuyển MP3 hoàn tất!", "log_type": "success",
+                                    "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
         else:
             logger.error("[PostProcess] ffmpeg mp3 lỗi:\n%s", proc_mp3.stderr.decode(errors="replace"))
 
@@ -294,7 +312,8 @@ def _post_process(
         result["video"] = video_path
 
     _emit("job_progress", {"job_id": session_id, "stage": "done",
-                            "message": "Xử lý hoàn tất!", "percent": 100})
+                            "message": "✨ Xử lý hoàn tất!", "log_type": "success",
+                            "current_step": current_step_ref["total"], "total_steps": current_step_ref["total"]})
     _emit("files_updated", {})
     logger.info("[PostProcess] Kết quả: %s", result)
     return result

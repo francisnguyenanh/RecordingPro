@@ -432,6 +432,51 @@ main {
 .progress-pct { width: 40px; text-align: right; font-weight: 700; font-size: 12px; color: var(--green); flex-shrink: 0; }
 .progress-stage { font-size: 12px; color: var(--text-dim); font-style: italic; min-height: 18px; }
 
+/* ── Step Indicator ───────────────────────────────────────────────────── */
+.step-indicator {
+  background: rgba(57, 255, 20, 0.1);
+  border: 1px solid var(--green);
+  color: var(--green);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 10px;
+  letter-spacing: 0.05em;
+}
+
+/* ── Log Container ────────────────────────────────────────────────── */
+.log-container {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  border-radius: 6px;
+  padding: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+}
+
+.log-entry {
+  padding: 3px 0;
+  word-break: break-word;
+}
+
+.log-entry.log-success {
+  color: #39ff14;
+}
+
+.log-entry.log-error {
+  color: #ff3c3c;
+}
+
+.log-entry.log-info {
+  color: #60a5fa;
+}
+
 /* ── Files ─────────────────────────────────────────────────────── */
 .files-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .file-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -659,3 +704,7 @@ details[open] .test-panel-header { color: #aaa; border-bottom: 1px solid #1e1e1e
 .det-confidence { font-family: var(--font); font-size: 0.75rem; color: #666; font-weight: 700; }
 .last-detected { font-family: var(--font); font-size: 0.85rem; color: var(--green); }
 .detection-time { font-family: var(--font); font-size: 0.7rem; color: #444; }
+
+#test-panel {
+  display: none !important;
+}
