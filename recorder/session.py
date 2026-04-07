@@ -264,11 +264,23 @@ def _post_process(
                                 "current_step": 0, "total_steps": 0})
         return result
 
-    # ── Đã loại bỏ logic ghi đè FPS tự tính ───────────
-    # Trước đây hệ thống tự nén chia tỉ lệ actual_fps làm co dãn timeline.
-    # Hiện tại trong VideoEngine đã có cơ chế "Duplicate Frame" (bù frame lấp khoảng trống)
-    # nên Video gốc luôn có cùng tốc độ thực tế với Audio. Ta giữ chuẩn 30 fps.
+    # ── Tính actual FPS từ frame_count và audio duration (WAV header) ───────────
+    # Đây là cách chính xác nhất để xử lý AV drift: override input FPS trong lệnh merge
+    # thay vì encode lại video — không mất chất lượng, không tạo sai số mới.
     actual_fps = 30.0
+    if video_frame_count > 0 and (has_mic or has_spk):
+        audio_ref_for_fps = mic_wav if has_mic else spk_wav
+        if audio_ref_for_fps and Path(audio_ref_for_fps).exists():
+            wav_dur = _get_wav_duration(audio_ref_for_fps)
+            if wav_dur > 1.0:  # ít nhất 1s, tránh chia cho 0 hoặc số quá nhỏ
+                raw_fps = video_frame_count / wav_dur
+                actual_fps = max(15.0, min(60.0, raw_fps))  # clamp vào khoảng hợp lệ
+                logger.info(
+                    "[PostProcess] Drift correction: frame_count=%d, audio_dur=%.3fs "
+                    "→ actual_fps=%.4f (target=30.0, drift=%.1fms)",
+                    video_frame_count, wav_dur, actual_fps,
+                    (wav_dur - video_frame_count / 30.0) * 1000,
+                )
 
     # ── Build lệnh ghép audio vào video ───────────────────────────────
     merged_path: Optional[str] = None
@@ -281,8 +293,10 @@ def _post_process(
             "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
         })
         merged_path = str(out_dir / f"{session_id}_final.mp4")
-        # Sử dụng đúng 30 FPS để không tái sinh lỗi co giãn video
-        cmd_merge = [ffmpeg, "-y", "-r", f"{actual_fps}", "-i", video_path]
+        # -r actual_fps BEFORE -i: override input frame rate so FFmpeg assigns
+        # correct PTS per frame. Fixes AV drift caused by software capture rate
+        # being slightly below the declared 30fps.
+        cmd_merge = [ffmpeg, "-y", "-r", f"{actual_fps:.4f}", "-i", video_path]
         if has_mic:
             if offset_s > 0:
                 cmd_merge += ["-ss", f"{offset_s:.4f}", "-i", mic_wav]

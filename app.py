@@ -663,6 +663,6 @@ def _on_startup() -> None:
 
 if __name__ == "__main__":
     _on_startup()
-    logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5012")
+    logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
     #socketio.run(app, host="127.0.0.1", port=5011, debug=True)
-    socketio.run(app, host="127.0.0.1", port=5012, debug=True)
+    socketio.run(app, host="127.0.0.1", port=5010, debug=True)
