@@ -191,19 +191,58 @@ def api_stop():
     def _do_stop():
         global current_session, app_state
         try:
+            # Tính tổng số steps dựa trên config
+            total_steps = 2  # Dừng video + Dừng audio
+            if merge_audio:
+                total_steps += 1  # Ghép audio
+            if convert_mp3:
+                total_steps += 1  # Chuyển MP3
+            total_steps += 1  # Hậu xử lý
+            
+            current_step = 0
+            
+            # Step 1: Dừng video
+            current_step += 1
             socketio.emit("job_progress", {
-                "job_id": job_id, "stage": "saving",
-                "message": "Đang lưu file video...", "percent": 0,
+                "job_id": job_id, "stage": "info",
+                "message": "🔴 Dừng ghi video...", "log_type": "info",
+                "current_step": current_step, "total_steps": total_steps,
             })
+            
+            # Step 2: Dừng audio
+            current_step += 1
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "info",
+                "message": "🔴 Dừng ghi audio...", "log_type": "info",
+                "current_step": current_step, "total_steps": total_steps,
+            })
+            
+            # Step 3: Hậu xử lý
+            current_step += 1
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "info",
+                "message": "⏳ Bắt đầu hậu xử lý...", "log_type": "info",
+                "current_step": current_step, "total_steps": total_steps,
+            })
+            
             session.stop(
                 merge_audio=merge_audio, convert_mp3=convert_mp3,
                 mic_gain=mic_gain, speaker_gain=speaker_gain,
+                current_step_ref={"step": current_step, "total": total_steps},
             )
+            
+            # Final Step: Hoàn tất
+            socketio.emit("job_progress", {
+                "job_id": job_id, "stage": "done",
+                "message": "✅ Xử lý hoàn tất!", "log_type": "success",
+                "current_step": total_steps, "total_steps": total_steps,
+            })
         except Exception as exc:
             logger.exception("[API/stop] Lỗi hậu xử lý")
             socketio.emit("job_progress", {
                 "job_id": job_id, "stage": "error",
-                "message": f"Lỗi: {exc}", "percent": 0,
+                "message": f"❌ Lỗi: {exc}", "log_type": "error",
+                "current_step": 0, "total_steps": 0,
             })
         finally:
             with _state_lock:
@@ -305,7 +344,8 @@ def api_merge_files():
             ffmpeg = _find_ffmpeg()
         except FileNotFoundError as exc:
             socketio.emit("job_progress", {"job_id": job_id, "stage": "error",
-                                           "message": str(exc), "percent": 0})
+                                           "message": str(exc), "log_type": "error",
+                                           "current_step": 0, "total_steps": 0})
             return
 
         stem = video_path.stem
@@ -315,9 +355,11 @@ def api_merge_files():
         out_path  = str(OUTPUT_DIR / out_name)
         offset_s  = offset_ms / 1000.0
 
+        # Step 1/2
         socketio.emit("job_progress", {
-            "job_id": job_id, "stage": "merging",
-            "message": f"Đang ghép {video_name} + {audio_name}…", "percent": 10,
+            "job_id": job_id, "stage": "info",
+            "message": f"🎬 Đang ghép {video_name} + {audio_name}…", "log_type": "info",
+            "current_step": 1, "total_steps": 2,
         })
 
         cmd = [ffmpeg, "-y", "-i", str(video_path)]
@@ -340,7 +382,8 @@ def api_merge_files():
         if proc.returncode == 0:
             socketio.emit("job_progress", {
                 "job_id": job_id, "stage": "done",
-                "message": f"Ghép xong → {out_name}", "percent": 100,
+                "message": f"✅ Ghép xong → {out_name}", "log_type": "success",
+                "current_step": 2, "total_steps": 2,
             })
             socketio.emit("files_updated", {})
         else:
@@ -348,7 +391,8 @@ def api_merge_files():
             logger.error("[merge-files] ffmpeg lỗi:\n%s", err_tail)
             socketio.emit("job_progress", {
                 "job_id": job_id, "stage": "error",
-                "message": "FFmpeg lỗi — xem log server", "percent": 0,
+                "message": f"❌ FFmpeg lỗi: {err_tail[-100:]}", "log_type": "error",
+                "current_step": 0, "total_steps": 0,
             })
 
     socketio.start_background_task(_do_merge)
