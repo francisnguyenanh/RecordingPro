@@ -135,8 +135,15 @@ class VideoEngine:
                 if sleep_t > 0:
                     time.sleep(sleep_t)
                 elif sleep_t < -FRAME_INTERVAL:
-                    # Bị lag quá 1 frame → reset deadline tránh catch-up vô hạn
-                    next_deadline = time.perf_counter()
+                    # Bị lag quá thời gian 1 frame → Ghi lặp lại frame hiện tại để lấp khoảng trống (chống lệch tiếng)
+                    missed = int(-sleep_t / FRAME_INTERVAL)
+                    for _ in range(missed):
+                        writer.write(frame)
+                        self.frame_count += 1
+                    next_deadline += missed * FRAME_INTERVAL
+                    # Reset lại lượng thời gian dư dả để chống tích luỹ quá lớn nếu lag quá khủng
+                    if (time.perf_counter() - next_deadline) > FRAME_INTERVAL:
+                        next_deadline = time.perf_counter()
             camera.stop()
             del camera
             logger.info(
@@ -199,8 +206,14 @@ class VideoEngine:
                     if sleep_t > 0:
                         time.sleep(sleep_t)
                     elif sleep_t < -FRAME_INTERVAL:
-                        # Bị lag quá 1 frame → reset deadline tránh catch-up vô hạn
-                        next_deadline = time.perf_counter()
+                        # Bị lag quá thời gian 1 frame → Ghi lặp lại frame hiện tại để lấp khoảng trống (chống lệch tiếng)
+                        missed = int(-sleep_t / FRAME_INTERVAL)
+                        for _ in range(missed):
+                            writer.write(frame)
+                            self.frame_count += 1
+                        next_deadline += missed * FRAME_INTERVAL
+                        if (time.perf_counter() - next_deadline) > FRAME_INTERVAL:
+                            next_deadline = time.perf_counter()
 
             logger.info(
                 "[VideoEngine] mss segment %d: display=#%d, frames=%d",
