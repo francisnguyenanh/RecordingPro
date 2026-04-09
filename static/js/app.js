@@ -114,6 +114,16 @@ function updateMeter(barId, dbId, level) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// RECORD MODE EXTRACTOR
+// ══════════════════════════════════════════════════════════════════════
+function getRecordMode() {
+  const val = document.querySelector('input[name="record-mode"]:checked')?.value ?? "mp4_mp3";
+  if (val === "mp3_only")  return { merge_audio: false, convert_mp3: true  };
+  if (val === "mp4_only")  return { merge_audio: true,  convert_mp3: false };
+  return                          { merge_audio: true,  convert_mp3: true  }; // mp4_mp3
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // REC BUTTON
 // ══════════════════════════════════════════════════════════════════════
 recBtn.addEventListener("click", async () => {
@@ -125,8 +135,7 @@ async function startRecording() {
   try {
     const body = {
       display_index: state.selectedDisplay,
-      merge_audio: document.getElementById("opt-merge").checked,
-      convert_mp3: document.getElementById("opt-mp3").checked,
+      ...getRecordMode()
     };
     const res = await fetch("/api/start", {
       method: "POST",
@@ -143,8 +152,7 @@ async function startRecording() {
 async function stopRecording() {
   try {
     const body = {
-      merge_audio: document.getElementById("opt-merge").checked,
-      convert_mp3: document.getElementById("opt-mp3").checked,
+      ...getRecordMode(),
       mic_gain: parseInt(document.getElementById("opt-mic-gain").value) || 1,
       speaker_gain: parseInt(document.getElementById("opt-spk-gain").value) || 1,
     };
@@ -643,6 +651,15 @@ document.getElementById("opt-spk-gain").addEventListener("change", (e) => {
     body: JSON.stringify({ speaker_gain: parseInt(e.target.value) }),
   }).catch(() => {});
 });
+document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
+  radio.addEventListener("change", (e) => {
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ record_mode_default: e.target.value }),
+    }).catch(() => {});
+  });
+});
 
 // ══════════════════════════════════════════════════════════════════════
 // INIT
@@ -658,6 +675,10 @@ document.getElementById("opt-spk-gain").addEventListener("change", (e) => {
     updateDetectorStatus(state.autoDetect);
     document.getElementById("opt-mic-gain").value = cfg.mic_gain || 1;
     document.getElementById("opt-spk-gain").value = cfg.speaker_gain || 1;
+    if (cfg.record_mode_default) {
+      const modeRadio = document.querySelector(`input[name="record-mode"][value="${cfg.record_mode_default}"]`);
+      if (modeRadio) modeRadio.checked = true;
+    }
   } catch (_) {}
 
   // Restore status
