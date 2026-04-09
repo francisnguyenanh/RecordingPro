@@ -36,7 +36,12 @@ class VideoEngine:
         self.recording = False
         self._thread: threading.Thread | None = None
         self._pending_display: int | None = None   # set by switch_display()
-        self._segment_paths: list[str] = []        # all recorded segment paths
+        
+        self.current_seg_idx = 0
+        self._seg_frame_count = 0
+        self._rollover_request = threading.Event()
+        self._rollover_done = threading.Event()
+        self._completed_segment: dict | None = None
 
     # ------------------------------------------------------------------
     def switch_display(self, new_index: int) -> None:
@@ -51,6 +56,15 @@ class VideoEngine:
     # ------------------------------------------------------------------
     def start(self) -> None:
         self.recording = True
+        self.frame_count = 0
+        self.current_seg_idx = 0
+        self._seg_frame_count = 0
+        self._rollover_request.clear()
+        self._rollover_done.clear()
+        self._completed_segment = None
+        self.start_timestamp = None
+        self._pending_display = None
+        
         self._thread = threading.Thread(
             target=self._capture_loop, daemon=True, name="video-recorder"
         )
@@ -61,38 +75,46 @@ class VideoEngine:
         )
 
     # ------------------------------------------------------------------
+    def roll_segment(self) -> dict:
+        """Kích hoạt việc đóng file hiện tại và mở file mới ở frame tiếp theo."""
+        self._rollover_done.clear()
+        self._rollover_request.set()
+        self._rollover_done.wait(timeout=5.0)
+        res = self._completed_segment
+        self._completed_segment = None
+        if not res:
+            res = {
+                "video": str(self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"),
+                "frame_count": self._seg_frame_count
+            }
+        return res
+
+    # ------------------------------------------------------------------
     def _capture_loop(self) -> None:
         """Vòng lặp ngoài: xử lý nhiều segment khi chuyển màn hình."""
-        seg_idx = 0
         while self.recording:
-            path = self._output_dir / f"{self.session_id}_v{seg_idx}.mp4"
-            self._segment_paths.append(str(path))
+            path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
 
             # Thử dxcam trước; nếu không khả dụng, dùng mss
-            result = self._record_segment_dxcam(path, self.display_index, seg_idx)
+            result = self._record_segment_dxcam(path, self.display_index)
             if result is None:
-                result = self._record_segment_mss(path, self.display_index, seg_idx)
+                result = self._record_segment_mss(path, self.display_index)
 
-            # result=True → dừng vì switch; False → dừng vì recording=False
             if self._pending_display is not None:
                 self.display_index = self._pending_display
                 self._pending_display = None
-                seg_idx += 1
-                logger.info(
-                    "[VideoEngine] Segment %d xong, chuyển sang màn hình #%d",
-                    seg_idx - 1, self.display_index,
-                )
+                # Không break, chỉ loop lại để mở dxcam với display mới
             else:
                 break
 
         logger.info(
-            "[VideoEngine] Ghi xong: %d segment(s), %d frames tổng.",
-            len(self._segment_paths), self.frame_count,
+            "[VideoEngine] Ghi xong: %d frames tổng.",
+            self.frame_count,
         )
 
     # ------------------------------------------------------------------
     def _record_segment_dxcam(
-        self, path: Path, display_index: int, seg_idx: int
+        self, path: Path, display_index: int
     ) -> bool | None:
         """
         Ghi một segment bằng dxcam.
@@ -112,7 +134,8 @@ class VideoEngine:
 
             first_frame = True
             next_deadline: float = 0.0
-            while self.recording and self._pending_display is None:
+            
+            while self.recording:
                 frame = camera.get_latest_frame()
                 if frame is None:
                     time.sleep(0.001)
@@ -122,35 +145,60 @@ class VideoEngine:
                     h, w = frame.shape[:2]
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                     writer = cv2.VideoWriter(str(path), fourcc, TARGET_FPS, (w, h))
-                    if seg_idx == 0:
-                        self.start_timestamp = time.perf_counter()
-                    # Anchor deadline to wall clock from first frame
+                    self.start_timestamp = time.perf_counter()
+                    self._seg_frame_count = 0
                     next_deadline = time.perf_counter()
                     first_frame = False
 
+                if self._rollover_request.is_set():
+                    if writer is not None:
+                        writer.release()
+                    
+                    self._completed_segment = {
+                        "video": str(path),
+                        "frame_count": self._seg_frame_count
+                    }
+                    
+                    self.current_seg_idx += 1
+                    path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
+                    
+                    if self._pending_display is not None:
+                        writer = None
+                        self._rollover_request.clear()
+                        self._rollover_done.set()
+                        camera.stop()
+                        del camera
+                        return True  # stop camera to re-init
+                        
+                    writer = cv2.VideoWriter(str(path), fourcc, TARGET_FPS, (w, h))
+                    self.start_timestamp = time.perf_counter()
+                    self._seg_frame_count = 0
+                    next_deadline = time.perf_counter()
+                    
+                    self._rollover_request.clear()
+                    self._rollover_done.set()
+
                 writer.write(frame)
                 self.frame_count += 1
+                self._seg_frame_count += 1
+                
                 next_deadline += FRAME_INTERVAL
                 sleep_t = next_deadline - time.perf_counter()
                 if sleep_t > 0:
                     time.sleep(sleep_t)
                 elif sleep_t < -FRAME_INTERVAL:
-                    # Bị lag quá thời gian 1 frame → Ghi lặp lại frame hiện tại để lấp khoảng trống (chống lệch tiếng)
                     missed = int(-sleep_t / FRAME_INTERVAL)
                     for _ in range(missed):
                         writer.write(frame)
                         self.frame_count += 1
+                        self._seg_frame_count += 1
                     next_deadline += missed * FRAME_INTERVAL
-                    # Reset lại lượng thời gian dư dả để chống tích luỹ quá lớn nếu lag quá khủng
                     if (time.perf_counter() - next_deadline) > FRAME_INTERVAL:
                         next_deadline = time.perf_counter()
+                        
             camera.stop()
             del camera
-            logger.info(
-                "[VideoEngine] dxcam segment %d: display=#%d, frames=%d",
-                seg_idx, display_index, self.frame_count,
-            )
-            return self._pending_display is not None
+            return False
 
         except ImportError:
             return None  # dxcam chưa cài
@@ -163,7 +211,7 @@ class VideoEngine:
 
     # ------------------------------------------------------------------
     def _record_segment_mss(
-        self, path: Path, display_index: int, seg_idx: int
+        self, path: Path, display_index: int
     ) -> bool:
         """
         Ghi một segment bằng mss (fallback).
@@ -189,49 +237,76 @@ class VideoEngine:
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(str(path), fourcc, TARGET_FPS, (w, h))
 
-                if seg_idx == 0:
-                    self.start_timestamp = time.perf_counter()
-
-                # Anchor deadline đến wall clock để tránh tích lũy drift
+                self.start_timestamp = time.perf_counter()
+                self._seg_frame_count = 0
                 next_deadline = time.perf_counter()
-                while self.recording and self._pending_display is None:
+                
+                while self.recording:
+                    if self._rollover_request.is_set():
+                        if writer is not None:
+                            writer.release()
+                        
+                        self._completed_segment = {
+                            "video": str(path),
+                            "frame_count": self._seg_frame_count
+                        }
+                        
+                        self.current_seg_idx += 1
+                        path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
+                        
+                        if self._pending_display is not None:
+                            writer = None
+                            self._rollover_request.clear()
+                            self._rollover_done.set()
+                            return True
+                            
+                        writer = cv2.VideoWriter(str(path), fourcc, TARGET_FPS, (w, h))
+                        self.start_timestamp = time.perf_counter()
+                        self._seg_frame_count = 0
+                        next_deadline = time.perf_counter()
+                        
+                        self._rollover_request.clear()
+                        self._rollover_done.set()
+
                     img = sct.grab(monitor)
                     frame = np.array(img, dtype=np.uint8)
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
                     writer.write(frame)
                     self.frame_count += 1
+                    self._seg_frame_count += 1
 
                     next_deadline += FRAME_INTERVAL
                     sleep_t = next_deadline - time.perf_counter()
                     if sleep_t > 0:
                         time.sleep(sleep_t)
                     elif sleep_t < -FRAME_INTERVAL:
-                        # Bị lag quá thời gian 1 frame → Ghi lặp lại frame hiện tại để lấp khoảng trống (chống lệch tiếng)
                         missed = int(-sleep_t / FRAME_INTERVAL)
                         for _ in range(missed):
                             writer.write(frame)
                             self.frame_count += 1
+                            self._seg_frame_count += 1
                         next_deadline += missed * FRAME_INTERVAL
                         if (time.perf_counter() - next_deadline) > FRAME_INTERVAL:
                             next_deadline = time.perf_counter()
 
-            logger.info(
-                "[VideoEngine] mss segment %d: display=#%d, frames=%d",
-                seg_idx, display_index, self.frame_count,
-            )
         except Exception as exc:
-            logger.error("[VideoEngine] mss segment %d lỗi: %s", seg_idx, exc)
+            logger.error("[VideoEngine] mss segment lỗi: %s", exc)
         finally:
             if writer is not None:
                 writer.release()
 
-        return self._pending_display is not None
+        return False
 
     # ------------------------------------------------------------------
-    def stop(self) -> list[str]:
-        """Dừng ghi. Trả về danh sách đường dẫn các segment video."""
+    def stop(self) -> dict:
+        """Dừng ghi. Trả về thông tin phân đoạn cuối cùng."""
         self.recording = False
+        self._rollover_done.set()
         if self._thread is not None:
             self._thread.join(timeout=10)
         logger.info("[VideoEngine] Đã dừng ghi màn hình.")
-        return list(self._segment_paths)
+        
+        return {
+            "video": str(self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"),
+            "frame_count": self._seg_frame_count
+        }

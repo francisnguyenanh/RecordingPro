@@ -22,7 +22,6 @@ _POPEN_FLAGS: dict = (
     if sys.platform == "win32" else {}
 )
 
-
 def _emit(event: str, data: dict) -> None:
     """Emit SocketIO an toàn (tránh import vòng tròn)."""
     try:
@@ -30,6 +29,9 @@ def _emit(event: str, data: dict) -> None:
         socketio.emit(event, data)
     except Exception as exc:
         logger.debug("[Session] emit(%s) thất bại: %s", event, exc)
+
+
+SEGMENT_DURATION_SECONDS = 300
 
 
 class RecordingSession:
@@ -42,6 +44,12 @@ class RecordingSession:
         self.video = VideoEngine(self.session_id, display_index=display_index, output_dir=self._output_dir)
         self.sync_offset_ms: float = 0.0
         self.is_recording: bool = False
+        
+        self.chunk_idx = 0
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ChunkProc")
+        self.futures = []
+        self._stop_event = threading.Event()
+        self._timer_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -59,6 +67,11 @@ class RecordingSession:
             (self.video.start_timestamp - self.audio.start_timestamp) * 1000
         )
         self.is_recording = True
+        self._stop_event.clear()
+        
+        self._timer_thread = threading.Thread(target=self._segment_timer, daemon=True, name="session-timer")
+        self._timer_thread.start()
+        
         logger.info(
             "[Session] Bắt đầu session=%s, display=%d, sync_offset=%.1fms",
             self.session_id,
@@ -67,80 +80,101 @@ class RecordingSession:
         )
 
     # ------------------------------------------------------------------
+    def _segment_timer(self) -> None:
+        """Thread liên tục kiểm tra theo SEGMENT_DURATION_SECONDS để trigger rollover."""
+        while not self._stop_event.wait(SEGMENT_DURATION_SECONDS):
+            if not self.is_recording:
+                break
+            self._do_rollover()
+
+    # ------------------------------------------------------------------
+    def _do_rollover(self) -> None:
+        """Thực hiện lưu đoạn hiện tại và submit cho ThreadPoolExecutor gộp lại ngay lập tức."""
+        logger.info("[Session] Rollover chunk %d", self.chunk_idx)
+        vi = self.video.roll_segment()
+        time.sleep(0.05)
+        ai = self.audio.roll_segment()
+        
+        chunk_offset_ms = self.sync_offset_ms
+        
+        # update sync offset cho đoạn mới
+        if self.video.start_timestamp and self.audio.start_timestamp:
+            self.sync_offset_ms = (self.video.start_timestamp - self.audio.start_timestamp) * 1000
+
+        f = self.executor.submit(
+            _process_chunk, self.session_id, self.chunk_idx, vi, ai, chunk_offset_ms, self._output_dir
+        )
+        self.futures.append(f)
+        self.chunk_idx += 1
+
+    # ------------------------------------------------------------------
     def switch_display(self, new_index: int) -> None:
-        """Chuyển màn hình ghi ngay trong khi đang ghi."""
-        self.video.switch_display(new_index)
+        """Chuyển màn hình ghi. Kích hoạt rollover sớm để tách segment."""
         logger.info("[Session] Chuyển màn hình ghi → #%d", new_index)
+        self.video.switch_display(new_index)
+        self._do_rollover()
 
     # ------------------------------------------------------------------
     def stop(self, merge_audio: bool = True, convert_mp3: bool = True,
              mic_gain: float = 1.0, speaker_gain: float = 1.0,
              current_step_ref: dict = None) -> dict:
-        """Dừng video → đợi 50ms → dừng audio → hậu xử lý."""
-        video_paths = self.video.stop()   # 1. Video trước (list of segment paths)
-        time.sleep(0.05)                  # 2. Đợi
-        audio_paths = self.audio.stop()   # 3. Audio sau
+        """Dừng ghi âm/video và join các worker trả về kết quả cuối."""
         self.is_recording = False
+        self._stop_event.set()
+        if self._timer_thread:
+            self._timer_thread.join(timeout=3)
+
+        vi = self.video.stop()   # 1. Video dừng
+        time.sleep(0.05)
+        ai = self.audio.stop()   # 2. Audio dừng
+        
         logger.info("[Session] Đã dừng session=%s", self.session_id)
 
-        return _post_process(
+        # Queue chunk cuối
+        if vi and ai:
+            f = self.executor.submit(
+                _process_chunk, self.session_id, self.chunk_idx, vi, ai, self.sync_offset_ms, self._output_dir
+            )
+            self.futures.append(f)
+
+        res = _final_post_process(
             session_id=self.session_id,
-            video_paths=video_paths,
-            audio_paths=audio_paths,
+            futures=self.futures,
             merge_audio=merge_audio,
             convert_mp3=convert_mp3,
-            offset_ms=self.sync_offset_ms,
             mic_gain=mic_gain,
             speaker_gain=speaker_gain,
             current_step_ref=current_step_ref,
             output_dir=self._output_dir,
-            video_frame_count=self.video.frame_count,
         )
+        self.executor.shutdown(wait=False)
+        return res
 
 
 # ══════════════════════════════════════════════════════════════════════
 def _find_ffmpeg() -> str:
-    """
-    Tìm ffmpeg theo thứ tự ưu tiên:
-    1. Bundled binary: <project_root>/bin/ffmpeg.exe  (Windows)
-                       <project_root>/bin/ffmpeg       (Linux/Mac)
-    2. Bundled binary khi đóng gói PyInstaller: sys._MEIPASS/bin/ffmpeg.exe
-    3. ffmpeg trong PATH hệ thống (shutil.which)
-    4. Các đường dẫn cứng thường gặp
-    Raise FileNotFoundError nếu không tìm thấy ở đâu cả.
-    """
+    """Tìm ffmpeg theo thứ tự ưu tiên."""
     import sys
     import shutil
 
     exe = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-
-    # 1. Bundled trong project: thư mục bin/ cạnh app.py (hoặc cạnh .exe khi PyInstaller)
     candidates = []
-
-    # Thư mục chứa file đang chạy (session.py → recorder/ → project root)
     project_root = Path(__file__).parent.parent
     candidates.append(project_root / "bin" / exe)
 
-    # Khi build bằng PyInstaller --onefile, file được giải nén ra sys._MEIPASS
     if hasattr(sys, "_MEIPASS"):
         candidates.append(Path(sys._MEIPASS) / "bin" / exe)
-
-    # Khi build bằng PyInstaller --onedir
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable).parent / "bin" / exe)
 
     for path in candidates:
         if path.exists():
-            logger.info("[FFmpeg] Dùng bundled binary: %s", path)
             return str(path)
 
-    # 2. PATH hệ thống
     found = shutil.which("ffmpeg")
     if found:
-        logger.info("[FFmpeg] Dùng ffmpeg từ PATH: %s", found)
         return found
 
-    # 3. Đường dẫn cứng fallback
     hardcoded = [
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
@@ -149,7 +183,6 @@ def _find_ffmpeg() -> str:
     ]
     for p in hardcoded:
         if Path(p).exists():
-            logger.info("[FFmpeg] Dùng hardcoded path: %s", p)
             return p
 
     raise FileNotFoundError(
@@ -160,7 +193,7 @@ def _find_ffmpeg() -> str:
 
 
 def _get_wav_duration(wav_path: str) -> float:
-    """Lấy duration (giây) của WAV bằng cách đọc header — không cần FFmpeg."""
+    """Lấy duration (giây) của WAV bằng cách đọc header."""
     import wave
     try:
         with wave.open(str(wav_path), "rb") as wf:
@@ -170,285 +203,176 @@ def _get_wav_duration(wav_path: str) -> float:
     return 0.0
 
 
-def _concat_video_segments(ffmpeg: str, session_id: str, paths: list[str], output_dir: Path = None) -> str:
-    """Nối nhiều segment video thành một file bằng FFmpeg concat demuxer."""
-    out_dir = output_dir or OUTPUT_DIR
-    out_path = str(out_dir / f"{session_id}_video.mp4")
-    list_file = out_dir / f"{session_id}_concat.txt"
-    try:
-        with list_file.open("w", encoding="utf-8") as f:
-            for p in paths:
-                # Escape single quotes in path for ffconcat format
-                escaped = p.replace("'", "'\\''")
-                f.write(f"file '{escaped}'\n")
+def _process_chunk(session_id: str, chunk_idx: int, vi: dict, ai: dict, offset_ms: float, output_dir: Path) -> str | None:
+    """Xử lý đồng bộ ngay lập tức 1 segment (video + audio) bằng ffmpeg -> trả về chunk path."""
+    ffmpeg = _find_ffmpeg()
+    video_path = vi.get("video")
+    video_frame_count = vi.get("frame_count", 0)
+    if not video_path or not Path(video_path).exists():
+        return None
 
-        cmd = [
-            ffmpeg, "-y", "-f", "concat", "-safe", "0",
-            "-i", str(list_file), "-c", "copy", out_path,
+    mic_wav = ai.get("mic")
+    spk_wav = ai.get("speaker")
+    has_mic = mic_wav and Path(mic_wav).exists()
+    has_spk = spk_wav and Path(spk_wav).exists()
+    chunk_path = str(output_dir / f"{session_id}_chunk_{chunk_idx}.mp4")
+
+    _emit("job_progress", {
+        "job_id": session_id, "stage": "info",
+        "message": f"⚙️ Đang xử lý phân đoạn {chunk_idx + 1}...", "log_type": "info",
+        "current_step": 0, "total_steps": 0,
+    })
+
+    actual_fps = 30.0
+    if video_frame_count > 0 and (has_mic or has_spk):
+        audio_ref = mic_wav if has_mic else spk_wav
+        if audio_ref and Path(audio_ref).exists():
+            wav_dur = _get_wav_duration(audio_ref)
+            if wav_dur > 1.0:
+                actual_fps = max(15.0, min(60.0, video_frame_count / wav_dur))
+                
+    offset_s = offset_ms / 1000.0
+    cmd = [ffmpeg, "-y", "-r", f"{actual_fps:.4f}", "-i", video_path]
+    
+    if has_mic:
+        if offset_s > 0: cmd += ["-ss", f"{offset_s:.4f}", "-i", mic_wav]
+        elif offset_s < 0: cmd += ["-itsoffset", f"{-offset_s:.4f}", "-i", mic_wav]
+        else: cmd += ["-i", mic_wav]
+    if has_spk:
+        if offset_s > 0: cmd += ["-ss", f"{offset_s:.4f}", "-i", spk_wav]
+        elif offset_s < 0: cmd += ["-itsoffset", f"{-offset_s:.4f}", "-i", spk_wav]
+        else: cmd += ["-i", spk_wav]
+
+    if has_mic and has_spk:
+        cmd += [
+            "-filter_complex",
+            "[1:a]aresample=async=1000,volume=1.0[m];[2:a]aresample=async=1000,volume=1.0[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
+            "-map", "0:v", "-map", "[a]",
         ]
-        proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
-        if proc.returncode != 0:
-            logger.error(
-                "[PostProcess] concat lỗi:\n%s", proc.stderr.decode(errors="replace")
-            )
-            return paths[0]  # fallback: chỉ dùng segment đầu
+    elif has_mic:
+        cmd += ["-filter_complex", "[1:a]aresample=async=1000,volume=1.0[m]", "-map", "0:v", "-map", "[m]"]
+    elif has_spk:
+        cmd += ["-filter_complex", "[1:a]aresample=async=1000,volume=1.0[s]", "-map", "0:v", "-map", "[s]"]
+    else:
+        cmd += ["-c:v", "copy"]
 
-        # Xoá các segment gốc
-        for p in paths:
+    if has_mic or has_spk:
+        cmd += [
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", chunk_path
+        ]
+    else:
+        cmd += [
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30", chunk_path
+        ]
+
+    proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
+    if proc.returncode != 0:
+        logger.error("[ChunkProc] Chunk %d lỗi:\n%s", chunk_idx, proc.stderr.decode(errors="replace"))
+        return None
+
+    # Dọn dẹp chunk raw files
+    for p in [video_path, mic_wav, spk_wav]:
+        if p and Path(p).exists():
             try:
                 Path(p).unlink()
             except Exception:
                 pass
-        return out_path
-    finally:
-        try:
-            list_file.unlink()
-        except Exception:
-            pass
+
+    return chunk_path
 
 
-def _post_process(
+def _final_post_process(
     session_id: str,
-    video_paths: list[str],
-    audio_paths: dict,
+    futures: list,
     merge_audio: bool,
     convert_mp3: bool,
-    offset_ms: float,
     mic_gain: float = 1.0,
     speaker_gain: float = 1.0,
     current_step_ref: dict = None,
     output_dir: Path = None,
-    video_frame_count: int = 0,
 ) -> dict:
     if current_step_ref is None:
         current_step_ref = {"step": 3, "total": 3}
-
+        
     out_dir = output_dir or OUTPUT_DIR
     result = {"video": None, "audio_mp3": None, "merged": None}
     ffmpeg = _find_ffmpeg()
-    mic_wav: Optional[str] = audio_paths.get("mic")
-    spk_wav: Optional[str] = audio_paths.get("speaker")
-    has_mic = mic_wav and Path(mic_wav).exists()
-    has_spk = spk_wav and Path(spk_wav).exists()
-    offset_s = offset_ms / 1000.0
 
-    # Các mức volume thực tế sau khi nhân gain
-    mic_vol = round(0.7 * mic_gain, 4)
-    spk_vol = round(1.0 * speaker_gain, 4)
+    _emit("job_progress", {
+        "job_id": session_id, "stage": "info",
+        "message": "⏳ Đang đợi xử lý các phân đoạn...", "log_type": "info",
+        "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
+    })
 
-    # ── Bước 0: Nối segment nếu có chuyển màn hình ────────────────────
-    valid_paths = [p for p in video_paths if Path(p).exists()]
-    if len(valid_paths) > 1:
-        current_step_ref["step"] += 1
-        _emit("job_progress", {
-            "job_id": session_id, "stage": "info",
-            "message": f"🔗 Đang nối {len(valid_paths)} segment video...", "log_type": "info",
-            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
-        })
-        video_path = _concat_video_segments(ffmpeg, session_id, valid_paths, out_dir)
-    elif valid_paths:
-        current_step_ref["step"] += 1
-        _emit("job_progress", {
-            "job_id": session_id, "stage": "info",
-            "message": "💾 Đang lưu và hoàn thiện file video...", "log_type": "info",
-            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
-        })
-        canonical = str(out_dir / f"{session_id}_video.mp4")
-        if valid_paths[0] != canonical:
-            Path(valid_paths[0]).rename(canonical)
-        video_path = canonical
-    else:
-        logger.error("[PostProcess] Không có file video nào tồn tại.")
+    chunk_paths = []
+    for f in concurrent.futures.as_completed(futures):
+        res = f.result()
+        if res and Path(res).exists():
+            chunk_paths.append(res)
+            
+    import re
+    def get_chunk_idx(p):
+        m = re.search(r'_chunk_(\d+)\.mp4$', str(p))
+        return int(m.group(1)) if m else 0
+    chunk_paths.sort(key=get_chunk_idx)
+    
+    if not chunk_paths:
         _emit("job_progress", {"job_id": session_id, "stage": "error",
-                                "message": "❌ Không có file video.", "log_type": "error",
+                                "message": "❌ Không có file video nào được xử lý.", "log_type": "error",
                                 "current_step": 0, "total_steps": 0})
+        logger.error("[PostProcess] Không có chunk.")
         return result
 
-    # ── Tính actual FPS từ frame_count và audio duration (WAV header) ───────────
-    # Đây là cách chính xác nhất để xử lý AV drift: override input FPS trong lệnh merge
-    # thay vì encode lại video — không mất chất lượng, không tạo sai số mới.
-    actual_fps = 30.0
-    if video_frame_count > 0 and (has_mic or has_spk):
-        audio_ref_for_fps = mic_wav if has_mic else spk_wav
-        if audio_ref_for_fps and Path(audio_ref_for_fps).exists():
-            wav_dur = _get_wav_duration(audio_ref_for_fps)
-            if wav_dur > 1.0:  # ít nhất 1s, tránh chia cho 0 hoặc số quá nhỏ
-                raw_fps = video_frame_count / wav_dur
-                actual_fps = max(15.0, min(60.0, raw_fps))  # clamp vào khoảng hợp lệ
-                logger.info(
-                    "[PostProcess] Drift correction: frame_count=%d, audio_dur=%.3fs "
-                    "→ actual_fps=%.4f (target=30.0, drift=%.1fms)",
-                    video_frame_count, wav_dur, actual_fps,
-                    (wav_dur - video_frame_count / 30.0) * 1000,
-                )
+    current_step_ref["step"] += 1
+    _emit("job_progress", {
+        "job_id": session_id, "stage": "info",
+        "message": f"🔗 Đang nối {len(chunk_paths)} phân đoạn lại...", "log_type": "info",
+        "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
+    })
 
-    # ── Build lệnh ghép audio vào video ───────────────────────────────
-    merged_path: Optional[str] = None
-    cmd_merge: Optional[list] = None
-    if merge_audio and (has_mic or has_spk):
-        current_step_ref["step"] += 1
-        _emit("job_progress", {
-            "job_id": session_id, "stage": "info",
-            "message": "🎬 Đang trộn audio vào video...", "log_type": "info",
-            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
-        })
-        merged_path = str(out_dir / f"{session_id}_final.mp4")
-        # -r actual_fps BEFORE -i: override input frame rate so FFmpeg assigns
-        # correct PTS per frame. Fixes AV drift caused by software capture rate
-        # being slightly below the declared 30fps.
-        cmd_merge = [ffmpeg, "-y", "-r", f"{actual_fps:.4f}", "-i", video_path]
-        if has_mic:
-            if offset_s > 0:
-                cmd_merge += ["-ss", f"{offset_s:.4f}", "-i", mic_wav]
-            elif offset_s < 0:
-                cmd_merge += ["-itsoffset", f"{-offset_s:.4f}", "-i", mic_wav]
-            else:
-                cmd_merge += ["-i", mic_wav]
-        if has_spk:
-            if offset_s > 0:
-                cmd_merge += ["-ss", f"{offset_s:.4f}", "-i", spk_wav]
-            elif offset_s < 0:
-                cmd_merge += ["-itsoffset", f"{-offset_s:.4f}", "-i", spk_wav]
-            else:
-                cmd_merge += ["-i", spk_wav]
-        if has_mic and has_spk:
-            cmd_merge += [
-                "-filter_complex",
-                f"[1:a]aresample=async=1000,volume={mic_vol}[m];[2:a]aresample=async=1000,volume={spk_vol}[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
-                "-map", "0:v", "-map", "[a]",
-            ]
-        elif has_mic:
-            cmd_merge += ["-filter_complex", f"[1:a]aresample=async=1000,volume={mic_vol}[m]", "-map", "0:v", "-map", "[m]"]
+    final_mp4 = str(out_dir / f"{session_id}_final.mp4")
+    list_file = out_dir / f"{session_id}_concat.txt"
+    try:
+        with list_file.open("w", encoding="utf-8") as f:
+            for p in chunk_paths:
+                escaped = p.replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+
+        cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", final_mp4]
+        proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
+        if proc.returncode != 0:
+            logger.error("[PostProcess] concat lỗi:\n%s", proc.stderr.decode(errors="replace"))
         else:
-            cmd_merge += ["-filter_complex", f"[1:a]aresample=async=1000,volume={spk_vol}[s]", "-map", "0:v", "-map", "[s]"]
-        cmd_merge += [
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30",
-            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-            merged_path,
-        ]
+            result["merged"] = final_mp4
+            result["video"] = final_mp4
+            for p in chunk_paths:
+                try: Path(p).unlink()
+                except: pass
+    finally:
+        try: list_file.unlink()
+        except: pass
 
-    # ── Build lệnh chuyển audio sang MP3 ──────────────────────────────
-    mp3_path: Optional[str] = None
-    cmd_mp3: Optional[list] = None
-    if convert_mp3 and (has_mic or has_spk):
+    # Optional: MP3 conversion from the final mp4
+    if convert_mp3 and result["merged"]:
         current_step_ref["step"] += 1
         _emit("job_progress", {
             "job_id": session_id, "stage": "info",
-            "message": "🎵 Đang chuyển đổi sang MP3...", "log_type": "info",
+            "message": "🎵 Đang xuất ra file MP3...", "log_type": "info",
             "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
         })
         mp3_path = str(out_dir / f"{session_id}_audio.mp3")
-        cmd_mp3 = [ffmpeg, "-y"]
-        if has_mic:
-            cmd_mp3 += ["-i", mic_wav]
-        if has_spk:
-            cmd_mp3 += ["-i", spk_wav]
-        if has_mic and has_spk:
-            cmd_mp3 += [
-                "-filter_complex",
-                f"[0:a]volume={mic_vol}[m];[1:a]volume={spk_vol}[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
-                "-map", "[a]",
-            ]
-        elif has_mic:
-            cmd_mp3 += ["-filter_complex", f"[0:a]volume={mic_vol}[a]", "-map", "[a]"]
-        else:
-            cmd_mp3 += ["-filter_complex", f"[0:a]volume={spk_vol}[a]", "-map", "[a]"]
-        cmd_mp3 += ["-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", mp3_path]
-
-    # ── Thực thi FFmpeg: song song nếu cả hai, tuần tự nếu một ────────
-    def _run_popen(cmd: list) -> tuple[int, bytes]:
-        """Chạy FFmpeg, trả về (returncode, stderr_bytes). An toàn với pipe buffer."""
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **_POPEN_FLAGS
-        )
-        _, err = proc.communicate()
-        return proc.returncode, err or b""
-
-    def _emit_ffmpeg_error(err_bytes: bytes, step: dict) -> None:
-        err_msg = err_bytes.decode(errors="replace")[-300:].strip()
-        _emit("job_progress", {
-            "job_id": session_id, "stage": "error",
-            "message": f"❌ FFmpeg lỗi:\n{err_msg}", "log_type": "error",
-            "current_step": step["step"], "total_steps": step["total"],
-        })
-
-    if cmd_merge and cmd_mp3:
-        # Khởi chạy song song — cả hai đọc/ghi file khác nhau
-        _emit("job_progress", {
-            "job_id": session_id, "stage": "info",
-            "message": "⚙️ FFmpeg đang chạy song song (merge + mp3)...", "log_type": "info",
-            "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"],
-        })
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            fut_m = pool.submit(_run_popen, cmd_merge)
-            fut_p = pool.submit(_run_popen, cmd_mp3)
-            rc_m, err_m = fut_m.result()
-            rc_p, err_p = fut_p.result()
-
-        if rc_m == 0:
-            result["merged"] = merged_path
-            _emit("job_progress", {"job_id": session_id, "stage": "info",
-                                    "message": "✅ Ghép video hoàn tất!", "log_type": "success",
-                                    "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
-        else:
-            logger.error("[PostProcess] ffmpeg merge lỗi:\n%s", err_m.decode(errors="replace"))
-            _emit_ffmpeg_error(err_m, current_step_ref)
-            merged_path = None
-
-        if rc_p == 0:
+        # Extract audio
+        cmd_mp3 = [
+            ffmpeg, "-y", "-i", final_mp4,
+            "-vn", "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", mp3_path
+        ]
+        proc = subprocess.run(cmd_mp3, capture_output=True, **_POPEN_FLAGS)
+        if proc.returncode == 0:
             result["audio_mp3"] = mp3_path
-            _emit("job_progress", {"job_id": session_id, "stage": "info",
-                                    "message": "✅ Chuyển MP3 hoàn tất!", "log_type": "success",
-                                    "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
-        else:
-            logger.error("[PostProcess] ffmpeg mp3 lỗi:\n%s", err_p.decode(errors="replace"))
-            _emit_ffmpeg_error(err_p, current_step_ref)
-
-    elif cmd_merge:
-        _emit("job_progress", {"job_id": session_id, "stage": "info",
-                                "message": "⚙️ FFmpeg đang ghép...", "log_type": "info",
-                                "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
-        rc_m, err_m = _run_popen(cmd_merge)
-        if rc_m == 0:
-            result["merged"] = merged_path
-            _emit("job_progress", {"job_id": session_id, "stage": "info",
-                                    "message": "✅ Ghép video hoàn tất!", "log_type": "success",
-                                    "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
-        else:
-            logger.error("[PostProcess] ffmpeg merge lỗi:\n%s", err_m.decode(errors="replace"))
-            _emit_ffmpeg_error(err_m, current_step_ref)
-            merged_path = None
-
-    elif cmd_mp3:
-        rc_p, err_p = _run_popen(cmd_mp3)
-        if rc_p == 0:
-            result["audio_mp3"] = mp3_path
-            _emit("job_progress", {"job_id": session_id, "stage": "info",
-                                    "message": "✅ Chuyển MP3 hoàn tất!", "log_type": "success",
-                                    "current_step": current_step_ref["step"], "total_steps": current_step_ref["total"]})
-        else:
-            logger.error("[PostProcess] ffmpeg mp3 lỗi:\n%s", err_p.decode(errors="replace"))
-            _emit_ffmpeg_error(err_p, current_step_ref)
-
-    # ── Bước C: Dọn dẹp ───────────────────────────────────────────────
-    for wav in [mic_wav, spk_wav]:
-        if wav and Path(wav).exists():
-            try:
-                Path(wav).unlink()
-            except Exception:
-                pass
-
-    if merged_path and Path(merged_path).exists() and Path(video_path).exists():
-        try:
-            Path(video_path).unlink()
-        except Exception:
-            pass
-    else:
-        result["video"] = video_path
 
     _emit("job_progress", {"job_id": session_id, "stage": "done",
                             "message": "✨ Xử lý hoàn tất!", "log_type": "success",
                             "current_step": current_step_ref["total"], "total_steps": current_step_ref["total"]})
     _emit("files_updated", {})
-    logger.info("[PostProcess] Kết quả: %s", result)
     return result

@@ -51,14 +51,16 @@ class AudioEngine:
         self._spk_wav_path: Path | None = None
         self._flush_lock = threading.Lock()
         self._flush_stop = threading.Event()
+        self.seg_idx = 0
 
     # ------------------------------------------------------------------
     def start(self) -> None:
         import time
         self.recording = True
+        self.seg_idx = 0
         self.start_timestamp = time.perf_counter()
-        self._mic_wav_path = self._output_dir / f"{self.session_id}_mic.wav"
-        self._spk_wav_path = self._output_dir / f"{self.session_id}_speaker.wav"
+        self._mic_wav_path = self._output_dir / f"{self.session_id}_mic_{self.seg_idx}.wav"
+        self._spk_wav_path = self._output_dir / f"{self.session_id}_speaker_{self.seg_idx}.wav"
         self._flush_stop.clear()
 
         t_mic = threading.Thread(target=self._record_mic, daemon=True, name="mic-recorder")
@@ -69,6 +71,40 @@ class AudioEngine:
         t_spk.start()
         t_flush.start()
         logger.info("[AudioEngine] Đã bắt đầu ghi âm (session=%s)", self.session_id)
+
+    # ------------------------------------------------------------------
+    def roll_segment(self) -> dict:
+        """Kế thúc segment hiện tại, chuyển sang đoạn mới và tự động chuyển wave file."""
+        with self._flush_lock:
+            with self._lock:
+                mic_data = self.mic_frames[:]
+                self.mic_frames.clear()
+                spk_data = self.speaker_frames[:]
+                self.speaker_frames.clear()
+
+            if mic_data and self._mic_wf is not None:
+                self._mic_wf.writeframes(b"".join(mic_data))
+            if spk_data and self._spk_wf is not None:
+                self._spk_wf.writeframes(b"".join(spk_data))
+
+            old_mic = str(self._mic_wav_path) if self._mic_wav_path else None
+            old_spk = str(self._spk_wav_path) if self._spk_wav_path else None
+
+            if self._mic_wf is not None:
+                self._mic_wf.close()
+                self._mic_wf = None
+            if self._spk_wf is not None:
+                self._spk_wf.close()
+                self._spk_wf = None
+
+            self.seg_idx += 1
+            self._mic_wav_path = self._output_dir / f"{self.session_id}_mic_{self.seg_idx}.wav"
+            self._spk_wav_path = self._output_dir / f"{self.session_id}_speaker_{self.seg_idx}.wav"
+            
+            import time
+            self.start_timestamp = time.perf_counter()
+
+            return {"mic": old_mic, "speaker": old_spk}
 
     # ------------------------------------------------------------------
     def _flush_loop(self) -> None:
@@ -262,14 +298,11 @@ class AudioEngine:
                 self._mic_wf.close()
                 self._mic_wf = None
                 result["mic"] = str(self._mic_wav_path)
-                logger.info("[AudioEngine] Đã lưu mic: %s", self._mic_wav_path)
 
             if self._spk_wf is not None:
                 self._spk_wf.close()
                 self._spk_wf = None
                 result["speaker"] = str(self._spk_wav_path)
-                logger.info("[AudioEngine] Đã lưu speaker: %s (sr=%d, ch=%d)",
-                            self._spk_wav_path, self._speaker_sr, self._speaker_ch)
 
         return result
 
