@@ -6,5 +6,5 @@ bin/ffmpeg.exe
 bin/ffmpeg
 **/__pycache__/
 *.pyc
-recorder/__pycache__/audio_engine.cpython-314.pyc
-recorder/__pycache__/session.cpython-314.pyc
+recorder/__pycache__/
+recorder/__pycache__/
