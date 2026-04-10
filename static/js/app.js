@@ -55,6 +55,96 @@ function stopTimer() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// METHOD 1: TAB TITLE — hiển thị thời gian ghi trên tab trình duyệt
+// ══════════════════════════════════════════════════════════════════════
+const BASE_TITLE = "Tomo Recording";
+let titleUpdateInterval = null;
+
+function startTitleUpdater() {
+  if (titleUpdateInterval) clearInterval(titleUpdateInterval);
+  titleUpdateInterval = setInterval(() => {
+    document.title = `🔴 REC ${formatTime(state.seconds)} • ${BASE_TITLE}`;
+  }, 1000);
+}
+
+function stopTitleUpdater() {
+  if (titleUpdateInterval) { clearInterval(titleUpdateInterval); titleUpdateInterval = null; }
+  document.title = BASE_TITLE;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// METHOD 3: SILENCE DETECTION — cảnh báo khi không có âm thanh 3 phút
+// NOTE: level_update gửi giá trị 0.0–1.0 (float), không phải dB
+// ══════════════════════════════════════════════════════════════════════
+const SILENCE_CFG = {
+  THRESHOLD: 0.001,          // dưới ngưỡng này coi là im lặng (~–60 dB)
+  WARNING_AFTER_S: 180,      // cảnh báo sau 3 phút im lặng liên tục
+  TOAST_DURATION_MS: 15000,  // toast tự đóng sau 15 giây
+};
+
+let _lastMicLevel = 0;
+let _lastSpkLevel = 0;
+let _silenceSeconds = 0;
+let _silenceInterval = null;
+let _silenceToastTimer = null;
+let _silenceNotified = false;
+
+function startSilenceMonitoring() {
+  _silenceSeconds = 0;
+  _silenceNotified = false;
+  _lastMicLevel = 0;
+  _lastSpkLevel = 0;
+  if (_silenceInterval) clearInterval(_silenceInterval);
+  _silenceInterval = setInterval(() => {
+    const isSilent = _lastMicLevel < SILENCE_CFG.THRESHOLD &&
+                     _lastSpkLevel < SILENCE_CFG.THRESHOLD;
+    if (isSilent) {
+      _silenceSeconds++;
+      if (_silenceSeconds >= SILENCE_CFG.WARNING_AFTER_S && !_silenceNotified) {
+        _silenceNotified = true;
+        showSilenceToast();
+      }
+    } else {
+      _silenceSeconds = 0;
+      _silenceNotified = false;
+      dismissSilenceToast();
+    }
+  }, 1000);
+}
+
+function stopSilenceMonitoring() {
+  if (_silenceInterval) { clearInterval(_silenceInterval); _silenceInterval = null; }
+  _silenceSeconds = 0;
+  _silenceNotified = false;
+  dismissSilenceToast();
+}
+
+function showSilenceToast() {
+  const mins = Math.floor(SILENCE_CFG.WARNING_AFTER_S / 60);
+  document.getElementById("silence-duration").textContent = `${mins} phút`;
+  const toast = document.getElementById("silence-check-toast");
+  toast.classList.remove("hidden");
+  // animate timer bar
+  const bar = document.getElementById("silence-timer-bar");
+  bar.style.transition = "none";
+  bar.style.width = "100%";
+  requestAnimationFrame(() => {
+    bar.style.transition = `width ${SILENCE_CFG.TOAST_DURATION_MS / 1000}s linear`;
+    bar.style.width = "0%";
+  });
+  _silenceToastTimer = setTimeout(() => {
+    dismissSilenceToast();
+    stopRecording();
+  }, SILENCE_CFG.TOAST_DURATION_MS);
+}
+
+function dismissSilenceToast() {
+  if (_silenceToastTimer) { clearTimeout(_silenceToastTimer); _silenceToastTimer = null; }
+  const toast = document.getElementById("silence-check-toast");
+  if (toast) toast.classList.add("hidden");
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // UI STATE
 // ══════════════════════════════════════════════════════════════════════
 function applyState(newState, durationSeconds = 0) {
@@ -150,6 +240,8 @@ recBtn.addEventListener("click", async () => {
 });
 
 async function startRecording() {
+  startTitleUpdater();
+  startSilenceMonitoring();
   try {
     const body = {
       display_index: state.selectedDisplay,
@@ -168,6 +260,8 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  stopTitleUpdater();
+  stopSilenceMonitoring();
   try {
     const body = {
       ...getRecordMode(),
@@ -247,6 +341,14 @@ function hideToast() {
 
 document.getElementById("toast-stop").addEventListener("click", () => { hideToast(); stopRecording(); });
 document.getElementById("toast-continue").addEventListener("click", hideToast);
+
+document.getElementById("silence-stop").addEventListener("click", () => { dismissSilenceToast(); stopRecording(); });
+document.getElementById("silence-continue").addEventListener("click", () => {
+  dismissSilenceToast();
+  // reset silence counter so it can warn again after another 3 minutes
+  _silenceSeconds = 0;
+  _silenceNotified = false;
+});
 
 // ══════════════════════════════════════════════════════════════════════
 // DISPLAY SELECTOR
@@ -383,8 +485,10 @@ socket.on("status_update", ({ state: s, duration_seconds }) => {
 
 socket.on("level_update", ({ mic, speaker }) => {
   if (state.appState !== "recording") return;
-  updateMeter("mic-bar", "mic-db", mic || 0);
-  updateMeter("spk-bar", "spk-db", speaker || 0);
+  _lastMicLevel = mic || 0;
+  _lastSpkLevel = speaker || 0;
+  updateMeter("mic-bar", "mic-db", _lastMicLevel);
+  updateMeter("spk-bar", "spk-db", _lastSpkLevel);
 });
 
 socket.on("job_progress", ({ stage, message, log_type, current_step, total_steps }) => {

@@ -44,6 +44,7 @@
     @keyframes toastIn  { from{transform:translateY(10px);opacity:0} to{transform:translateY(0);opacity:1} }
     @keyframes stripe-move { from{background-position:0 0} to{background-position:28px 0} }
     @keyframes breathe  { 0%,100%{opacity:.3} 50%{opacity:.7} }
+    @keyframes silence-shrink { from{width:100%} to{width:0%} }
 
     /* JS-toggled state classes */
     .hidden { display: none !important; }
@@ -182,6 +183,20 @@
       <button id="toast-continue" class="btn-toast-continue bg-transparent text-[#555] border border-[#333] rounded-sm px-3 py-1.5 font-mono text-[0.8rem] cursor-pointer transition-all hover:text-[#888] hover:border-[#555]">▶ Tiếp tục</button>
     </div>
     <div id="toast-timer-bar" class="toast-timer-bar h-0.5 bg-green mt-2.5 w-full"></div>
+  </div>
+
+  <!-- ══ TOAST: Cảnh báo im lặng ════════════════════════════════════ -->
+  <div id="silence-check-toast" class="toast hidden fixed bottom-6 right-6 rounded px-4 py-3 font-mono text-[0.85rem] min-w-[280px] z-[999]"
+       style="background:rgba(240,192,64,0.95); border:1px solid #f0c040; color:#1a1a1a; box-shadow:0 0 16px rgba(240,192,64,0.3); bottom:calc(1.5rem + 110px);">
+    <div class="toast-content">
+      <span class="font-bold block mb-1">⏱️ Không có âm thanh</span>
+      <span class="block mb-2 text-[0.8rem]">Đã ghi <span id="silence-duration">3 phút</span> mà không có tiếng. Vẫn đang record?</span>
+    </div>
+    <div class="flex gap-2">
+      <button id="silence-stop" class="bg-[#1a1a1a] text-white border-none rounded-sm px-3 py-1.5 font-mono text-[0.8rem] cursor-pointer transition-opacity hover:opacity-80">■ Dừng ghi</button>
+      <button id="silence-continue" class="bg-transparent text-[#444] border border-[#888] rounded-sm px-3 py-1.5 font-mono text-[0.8rem] cursor-pointer transition-all hover:text-[#222] hover:border-[#444]">▶ Tiếp tục</button>
+    </div>
+    <div id="silence-timer-bar" class="h-0.5 mt-2.5 w-full" style="background:#1a1a1a;"></div>
   </div>
 
   <!-- ══ HEADER ══════════════════════════════════════════════════════ -->

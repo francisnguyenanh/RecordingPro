@@ -212,6 +212,18 @@ class TrayApp:
             while True:
                 time.sleep(3)
                 self._refresh_icon()
+                # Update tooltip with recording time (Method 2)
+                try:
+                    r = requests.get("http://127.0.0.1:5010/api/status", timeout=1)
+                    data = r.json()
+                    if data.get("state") == "recording":
+                        secs = int(data.get("duration_seconds", 0))
+                        h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+                        self.icon.title = f"🔴 REC {h:02d}:{m:02d}:{s:02d} — Tomo Recording"
+                    else:
+                        self.icon.title = "Tomo Recording"
+                except Exception:
+                    pass
 
         threading.Thread(target=_icon_updater, daemon=True, name="tray-updater").start()
 
