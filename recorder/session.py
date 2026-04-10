@@ -371,6 +371,15 @@ def _final_post_process(
         if proc.returncode == 0:
             result["audio_mp3"] = mp3_path
 
+    # Nếu mp3_only (merge_audio=False) và có chuyển sang mp3 thành công/hoặc người dùng không muốn mp4
+    if not merge_audio and result["merged"]:
+        try:
+            Path(result["merged"]).unlink()
+            result["merged"] = None
+            result["video"] = None
+        except Exception as exc:
+            logger.error("[PostProcess] Không xóa được file video: %s", exc)
+
     _emit("job_progress", {"job_id": session_id, "stage": "done",
                             "message": "✨ Xử lý hoàn tất!", "log_type": "success",
                             "current_step": current_step_ref["total"], "total_steps": current_step_ref["total"]})

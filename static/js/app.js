@@ -63,6 +63,15 @@ function applyState(newState, durationSeconds = 0) {
   const labels = { idle: "SẴN SÀNG", recording: "ĐANG GHI", processing: "ĐANG XỬ LÝ" };
   statusLabel.textContent = labels[newState] || newState.toUpperCase();
 
+  const isBusy = newState !== "idle";
+  document.querySelectorAll('input[name="record-mode"]').forEach(r => r.disabled = isBusy);
+  document.getElementById("opt-mic-gain").disabled = isBusy;
+  document.getElementById("opt-spk-gain").disabled = isBusy;
+  document.querySelectorAll('.record-mode-group, #opt-mic-gain, #opt-spk-gain').forEach(el => {
+    el.style.opacity = isBusy ? '0.5' : '1';
+    el.style.pointerEvents = isBusy ? 'none' : 'auto';
+  });
+
   if (newState === "recording") {
     recBtn.classList.add("recording");
     recBtn.classList.remove("processing");
@@ -106,9 +115,18 @@ function updateMeter(barId, dbId, level) {
   const bar = document.getElementById(barId);
   const dbEl = document.getElementById(dbId);
   bar.style.width = (level * 100) + "%";
-  bar.className = "level-bar" + (
-    state.appState === "recording" ? " breathing" : ""
-  ) + (level >= 0.85 ? " red" : level >= 0.6 ? " yellow" : "");
+  
+  if (level >= 0.85) {
+    bar.classList.add("red");
+    bar.classList.remove("yellow", "bg-green");
+  } else if (level >= 0.6) {
+    bar.classList.add("yellow");
+    bar.classList.remove("red", "bg-green");
+  } else {
+    bar.classList.add("bg-green");
+    bar.classList.remove("red", "yellow");
+  }
+
   const db = level < 0.001 ? "–∞" : (20 * Math.log10(level)).toFixed(1) + " dB";
   dbEl.textContent = db;
 }

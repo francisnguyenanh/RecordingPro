@@ -76,11 +76,10 @@ class AudioEngine:
     def roll_segment(self) -> dict:
         """Kế thúc segment hiện tại, chuyển sang đoạn mới và tự động chuyển wave file."""
         with self._flush_lock:
-            with self._lock:
-                mic_data = self.mic_frames[:]
-                self.mic_frames.clear()
-                spk_data = self.speaker_frames[:]
-                self.speaker_frames.clear()
+            mic_data = self.mic_frames
+            self.mic_frames = []
+            spk_data = self.speaker_frames
+            self.speaker_frames = []
 
             if mic_data and self._mic_wf is not None:
                 self._mic_wf.writeframes(b"".join(mic_data))
@@ -115,11 +114,10 @@ class AudioEngine:
     def _flush_to_disk(self) -> None:
         """Ghi các frame đang chờ xuống file WAV. Giữ wave.Wave_write mở giữa các lần flush."""
         with self._flush_lock:
-            with self._lock:
-                mic_data = self.mic_frames[:]
-                self.mic_frames.clear()
-                spk_data = self.speaker_frames[:]
-                self.speaker_frames.clear()
+            mic_data = self.mic_frames
+            self.mic_frames = []
+            spk_data = self.speaker_frames
+            self.speaker_frames = []
 
             if mic_data and self._mic_wav_path is not None:
                 if self._mic_wf is None:
@@ -148,9 +146,8 @@ class AudioEngine:
                 if not self.recording:
                     raise sd.CallbackAbort
                 chunk = indata.copy()
-                with self._lock:
-                    self.mic_frames.append(chunk.tobytes())
-                    self.mic_level = _rms_level(chunk)
+                self.mic_frames.append(chunk.tobytes())
+                self.mic_level = _rms_level(chunk)
 
             with sd.InputStream(
                 samplerate=SAMPLE_RATE,
@@ -237,9 +234,8 @@ class AudioEngine:
                     if not self.recording:
                         return (None, pyaudio.paAbort)
                     arr = np.frombuffer(in_data, dtype=np.int16)
-                    with self._lock:
-                        self.speaker_frames.append(in_data)
-                        self.speaker_level = _rms_level(arr)
+                    self.speaker_frames.append(in_data)
+                    self.speaker_level = _rms_level(arr)
                     return (None, pyaudio.paContinue)
 
                 stream = pa.open(
@@ -273,9 +269,8 @@ class AudioEngine:
                 while self.recording:
                     data = mic.record(numframes=BLOCKSIZE)
                     arr = (data * 32767).astype(np.int16)
-                    with self._lock:
-                        self.speaker_frames.append(arr.tobytes())
-                        self.speaker_level = _rms_level(arr)
+                    self.speaker_frames.append(arr.tobytes())
+                    self.speaker_level = _rms_level(arr)
             return True
         except Exception as exc:
             logger.debug("[AudioEngine] soundcard loopback không khả dụng: %s", exc)

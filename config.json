@@ -1,9 +1,9 @@
 {
-  "default_display_index": 1,
+  "default_display_index": 2,
   "auto_detect_calls": false,
   "auto_record_delay_seconds": 5,
   "auto_stop_on_call_end": true,
-  "record_mode_default": "mp3_only",
+  "record_mode_default": "mp4_mp3",
   "mic_gain": 1,
   "speaker_gain": 1,
   "output_dir": null,

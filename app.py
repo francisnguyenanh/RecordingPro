@@ -190,13 +190,16 @@ def api_stop():
     def _do_stop():
         global current_session, app_state
         try:
-            # Tính tổng số steps dựa trên config
-            total_steps = 2  # Dừng video + Dừng audio
-            if merge_audio:
-                total_steps += 1  # Ghép audio
+            # Tính tổng số steps: 
+            # 1: Dừng video
+            # 2: Dừng audio
+            # 3: Bắt đầu hậu xử lý / Đợi xử lý phân đoạn
+            # 4: Nối phân đoạn (Concat)
+            # (+1 nếu convert_mp3): Xuất MP3
+            total_steps = 4
             if convert_mp3:
-                total_steps += 1  # Chuyển MP3
-            total_steps += 1  # Hậu xử lý
+                total_steps += 1
+            total_steps += 1  # Step 5/6: Hoàn tất
             
             current_step = 0
             
