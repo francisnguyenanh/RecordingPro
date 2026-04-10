@@ -63,7 +63,7 @@ let titleUpdateInterval = null;
 function startTitleUpdater() {
   if (titleUpdateInterval) clearInterval(titleUpdateInterval);
   titleUpdateInterval = setInterval(() => {
-    document.title = `🔴 REC ${formatTime(state.seconds)} • ${BASE_TITLE}`;
+    document.title = `🔴 ${formatTime(state.seconds)} • ${BASE_TITLE}`;
   }, 1000);
 }
 
