@@ -132,6 +132,12 @@ class RecordingSession:
         self.video.switch_display(new_index)
         self._do_rollover()
 
+    def switch_window(self, region: dict) -> None:
+        """Chuyển sang ghi cửa sổ khác khi đang record. Rollover segment tực thì."""
+        logger.info("[Session] Chuyển cửa sổ ghi → '%s'", region.get('title', ''))
+        self.video.switch_region(region)
+        self._do_rollover()
+
     # ------------------------------------------------------------------
     def stop(self, merge_audio: bool = True, convert_mp3: bool = True,
              mic_gain: float = 1.0, speaker_gain: float = 1.0,

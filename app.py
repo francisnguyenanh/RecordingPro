@@ -173,6 +173,7 @@ def api_start():
                     "width":  int(wr["width"]),
                     "height": int(wr["height"]),
                     "title":  str(wr.get("title", "")),
+                    "hwnd":   int(wr["hwnd"]) if wr.get("hwnd") else None,
                 }
                 if window_region["width"] <= 0 or window_region["height"] <= 0:
                     window_region = None
@@ -552,6 +553,31 @@ def api_switch_display():
     return jsonify({"ok": True, "display_index": new_index})
 
 
+@app.route("/api/switch-window", methods=["POST"])
+def api_switch_window():
+    """Chuyển sang ghi cửa sổ khác ngay khi đang recording."""
+    global current_session
+    with _state_lock:
+        if app_state != "recording" or current_session is None:
+            return jsonify({"ok": False, "error": "Không có phiên đang ghi."}), 409
+        data = request.get_json(silent=True) or {}
+        wr = data.get("window_region", {})
+        try:
+            region = {
+                "left":   int(wr["left"]),
+                "top":    int(wr["top"]),
+                "width":  int(wr["width"]),
+                "height": int(wr["height"]),
+                "title":  str(wr.get("title", "")),
+                "hwnd":   int(wr["hwnd"]) if wr.get("hwnd") else None,
+            }
+        except (KeyError, ValueError, TypeError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        current_session.switch_window(region)
+    socketio.emit("window_switched", {"title": region.get("title", "")})
+    return jsonify({"ok": True, "title": region.get("title", "")})
+
+
 @app.route("/api/simulate/call-start", methods=["POST"])
 def api_simulate_call_start():
     """
@@ -662,21 +688,136 @@ def api_audio_devices():
 
 @app.route("/api/windows", methods=["GET"])
 def api_windows():
-    """Liệt kê cửa sổ đang mở để chọn ghi theo cửa sổ."""
+    """Liệt kê tất cả cửa sổ hiện đang mở để chọn ghi.
+    Dùng ctypes.EnumWindows để đảm bảo lấy được Teams, Explorer, Notepad, v.v.
+    """
+    import sys
+    if sys.platform != "win32":
+        # fallback for non-Windows
+        try:
+            import pygetwindow as gw
+            return jsonify([
+                {"title": w.title, "left": w.left, "top": w.top,
+                 "width": w.width, "height": w.height}
+                for w in gw.getAllWindows()
+                if w.title and w.width > 100 and w.height > 100
+            ])
+        except Exception as exc:
+            logger.warning("[Windows] %s", exc)
+            return jsonify([])
+
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+
+    _WS_VISIBLE   = 0x10000000
+    _WS_EX_TOOLWINDOW = 0x00000080
+    buf = ctypes.create_unicode_buffer(512)
+    windows = []
+
+    def _enum_cb(hwnd, _lp):
+        # Chỉ lấy cửa sổ thực sự hiển thị
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        # Bỏ qua cửa sổ không có tiêu đề
+        user32.GetWindowTextW(hwnd, buf, 512)
+        title = buf.value.strip()
+        if not title:
+            return True
+        # Bỏ qua tool windows (tooltip, tray popup, v.v.)
+        ex_style = user32.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+        if ex_style & _WS_EX_TOOLWINDOW:
+            return True
+        # Lấy kích thước vùng client
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w = rect.right  - rect.left
+        h = rect.bottom - rect.top
+        if w < 100 or h < 100:
+            return True
+        windows.append({
+            "hwnd":  hwnd,
+            "title": title,
+            "left":  rect.left,
+            "top":   rect.top,
+            "width": w,
+            "height": h,
+        })
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+    # Sắp xếp theo tiêu đề
+    windows.sort(key=lambda x: x["title"].lower())
+    return jsonify(windows)
+
+
+@app.route("/api/windows/preview", methods=["POST"])
+def api_window_preview():
+    """Trả về ảnh preview (base64 JPEG) của cửa sổ được chọn.
+    Body: {hwnd?: int, title?: str, width: int, height: int}
+    """
+    import sys
+    if sys.platform != "win32":
+        return jsonify({"ok": False, "error": "Windows only"}), 400
+
+    data = request.get_json(silent=True) or {}
+    hwnd  = data.get("hwnd")
+    title = str(data.get("title", ""))
+    req_w = int(data.get("width",  0))
+    req_h = int(data.get("height", 0))
+
+    import ctypes, ctypes.wintypes
+    user32 = ctypes.windll.user32
+    gdi32  = ctypes.windll.gdi32
+
+    # Xác định HWND
+    if not hwnd and title:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(512)
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        found = []
+        def _cb(h, _):
+            user32.GetWindowTextW(h, buf, 512)
+            if title.lower() in buf.value.lower() and user32.IsWindowVisible(h):
+                found.append(h)
+            return True
+        user32.EnumWindows(WNDENUMPROC(_cb), 0)
+        hwnd = found[0] if found else None
+
+    if not hwnd:
+        return jsonify({"ok": False, "error": "Không tìm thấy cửa sổ"}), 404
+
+    if req_w <= 0 or req_h <= 0:
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        req_w = max(rect.right  - rect.left, 1)
+        req_h = max(rect.bottom - rect.top,  1)
+
+    # Giới hạn kích thước preview
+    MAX_DIM = 640
+    scale = min(MAX_DIM / req_w, MAX_DIM / req_h, 1.0)
+    pw = max(int(req_w * scale), 2)
+    ph = max(int(req_h * scale), 2)
+    pw = pw if pw % 2 == 0 else pw + 1
+    ph = ph if ph % 2 == 0 else ph + 1
+
     try:
-        import pygetwindow as gw
-        windows = []
-        for w in gw.getAllWindows():
-            if w.title and w.visible and w.width > 100 and w.height > 100:
-                windows.append({
-                    "title": w.title,
-                    "left": w.left, "top": w.top,
-                    "width": w.width, "height": w.height,
-                })
-        return jsonify(windows)
+        # PrintWindow capture
+        from recorder.video_engine import VideoEngine, _BITMAPINFOHEADER
+        frame_full = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
+        if frame_full is None:
+            return jsonify({"ok": False, "error": "Không capture được"}), 500
+
+        import cv2, base64, numpy as np
+        frame_small = cv2.resize(frame_full, (pw, ph))
+        _, buf_enc = cv2.imencode(".jpg", frame_small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        b64 = base64.b64encode(buf_enc.tobytes()).decode()
+        return jsonify({"ok": True, "preview_b64": b64, "width": pw, "height": ph})
     except Exception as exc:
-        logger.warning("[Windows] %s", exc)
-        return jsonify([])
+        logger.warning("[WindowPreview] %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ══════════════════════════════════════════════════════════════════════

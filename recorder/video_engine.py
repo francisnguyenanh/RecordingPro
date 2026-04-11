@@ -64,6 +64,7 @@ class VideoEngine:
         self.recording = False
         self._thread: threading.Thread | None = None
         self._pending_display: int | None = None   # set by switch_display()
+        self._pending_region: dict | None = None   # set by switch_region()
         
         self.current_seg_idx = 0
         self._seg_frame_count = 0
@@ -80,6 +81,13 @@ class VideoEngine:
                 "[VideoEngine] Yêu cầu chuyển màn hình: #%d → #%d",
                 self.display_index, new_index,
             )
+
+    def switch_region(self, new_region: dict) -> None:
+        """Chuyển sang capture cửa sổ/region khác ngay lập tức (thread-safe)."""
+        self.region = new_region
+        # Dùng _pending_display = -1 làm tín hiệu rollover region (giá trị đặc biệt)
+        self._pending_region = new_region
+        logger.info("[VideoEngine] Yêu cầu chuyển region → '%s'", new_region.get("title", ""))
 
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -158,7 +166,21 @@ class VideoEngine:
         """Capture cửa sổ/vùng màn hình.
         Nếu tìm được HWND (Windows), dùng PrintWindow — hoạt động kể cả khi cửa sổ bị che/inactive.
         Fallback sang mss region capture khi không tìm được HWND.
+        Hỗ trợ switch_region() ngay trong khi đang ghi.
         """
+        import numpy as np
+        # Vòng ngoài: chạy lại khi có pending_region
+        while self.recording:
+            self._pending_region = None
+            self._run_region_loop(np)
+            if self._pending_region is not None:
+                # Cập nhật region và tiếp tục
+                self.region = self._pending_region
+                continue
+            break
+
+    def _run_region_loop(self, np) -> None:
+        """Vòng capture nội bộ cho một region. Thoát khi hết recording hoặc có pending_region."""
         import numpy as np
 
         r = self.region
@@ -188,8 +210,13 @@ class VideoEngine:
 
         # Tìm HWND để dùng PrintWindow (background capture)
         hwnd = None
-        if title and sys.platform == "win32":
-            hwnd = VideoEngine._find_hwnd(title)
+        if sys.platform == "win32":
+            # Ưu tiên dùng hwnd từ region nếu có
+            if r.get("hwnd"):
+                hwnd = int(r["hwnd"])
+                logger.info("[VideoEngine] Dùng hwnd=%d trực tiếp từ region.", hwnd)
+            elif title:
+                hwnd = VideoEngine._find_hwnd(title)
             if hwnd:
                 logger.info("[VideoEngine] PrintWindow mode: '%s' (hwnd=%d)", title, hwnd)
             else:
@@ -204,7 +231,7 @@ class VideoEngine:
         try:
             if hwnd:
                 # ── PrintWindow capture (hoạt động kể cả khi cửa sổ bị che/inactive) ──
-                while self.recording:
+                while self.recording and self._pending_region is None:
                     if self._rollover_request.is_set():
                         writer, path = _do_rollover(writer, path)
                         next_deadline = time.perf_counter()
@@ -235,7 +262,7 @@ class VideoEngine:
                     "height": h,
                 }
                 with mss.mss() as sct:
-                    while self.recording:
+                    while self.recording and self._pending_region is None:
                         if self._rollover_request.is_set():
                             writer, path = _do_rollover(writer, path)
                             next_deadline = time.perf_counter()

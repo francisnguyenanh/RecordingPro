@@ -147,6 +147,32 @@
 
     /* Section title spacing */
     .section-title { margin-bottom:8px; }
+
+    /* Source tab buttons */
+    .src-tab.active { background:#1a1a1a !important; color:#c8c8c8 !important; }
+    .src-tab:not(.active):hover { background:#151515 !important; color:#888 !important; }
+
+    /* Window grid card */
+    .window-card { border:1px solid #333; border-radius:4px; padding:6px 8px; cursor:pointer; background:#111; transition:border-color .12s,background .12s; overflow:hidden; }
+    .window-card:hover { border-color:#555; background:#151515; }
+    .window-card.active { border-color:#39ff14; background:rgba(57,255,20,.06); }
+    .window-card .wc-title { font-size:10px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.4; }
+    .window-card .wc-size  { font-size:9px; color:#555; margin-top:1px; }
+    .window-card.active .wc-title { color:#39ff14; }
+
+    /* Display card 1-col */
+    .display-card { border:1px solid #333; border-radius:4px; padding:8px; cursor:pointer; background:#111111; transition:border-color .15s,box-shadow .15s; display:flex; align-items:center; gap:10px; }
+    .display-card:hover { border-color:#555; }
+    .display-card.active { border-color:#39ff14; box-shadow:0 0 8px rgba(57,255,20,.2); }
+    .display-card.active .display-label { color:#39ff14; }
+    .display-preview-thumb { width:80px; height:45px; object-fit:cover; border-radius:2px; background:#0a0a0a; flex-shrink:0; }
+    .display-info { flex:1; min-width:0; }
+    .display-label { font-size:.75rem; color:#aaa; font-family:'Courier Prime','Courier New',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .display-res { font-size:.65rem; color:#555; font-family:'Courier Prime','Courier New',monospace; }
+
+    /* Inline status dot mirroring */
+    #status-dot-inline.recording  { background:#ff3c3c; animation:pulse 1s ease-in-out infinite; }
+    #status-dot-inline.processing { background:#f0c040; animation:spin-dot 1.2s linear infinite; }
   </style>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
@@ -231,95 +257,112 @@
 
     <!-- ══ TAB 0: GHI ═══════════════════════════════════════════════ -->
     <div id="tab-panel-0" class="tab-panel active"
-         style="flex-direction:column; gap:0; padding:16px; max-width:900px; width:100%; margin:0 auto; box-sizing:border-box; overflow-y:auto;">
+         style="flex-direction:row; gap:0; padding:0; max-width:95%; width:100%; margin:0 auto; box-sizing:border-box; overflow:hidden; height:100%;">
 
-      <!-- ROW A: Display selector + Controls side-by-side -->
-      <div style="display:grid; grid-template-columns:1fr auto; gap:16px; align-items:start; margin-bottom:14px;">
+      <!-- LEFT: Source Selector (scrollable) -->
+      <div id="source-panel" style="width:340px; min-width:280px; max-width:380px; border-right:1px solid #252525; overflow-y:auto; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; gap:0;">
 
-        <!-- Display selector -->
-        <section id="display-selector" aria-label="Chọn màn hình ghi">
-          <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
-            🖥 CHỌN MÀN HÌNH
-          </h2>
-          <!-- Window mode toggle -->
-          <div class="flex items-center gap-2 mb-2">
-            <label class="toggle-switch" title="Bật để ghi theo cửa sổ thay vì toàn màn hình">
-              <input type="checkbox" id="window-mode-toggle" />
-              <span class="slider"></span>
-            </label>
-            <span class="text-[11px] text-dim">Ghi theo cửa sổ</span>
-          </div>
-          <!-- Window capture section (hidden by default) -->
-          <div id="window-capture-section" class="hidden mb-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <select id="window-select"
-                class="flex-1 min-w-[180px] bg-bg2 text-accent border border-border rounded px-2 py-1.5 font-mono text-xs cursor-pointer hover:border-[#444] outline-none">
-                <option value="">— Chọn cửa sổ —</option>
-              </select>
-              <button id="refresh-windows"
-                class="font-mono text-[10px] px-2.5 py-1 rounded border border-border bg-transparent text-dim cursor-pointer hover:border-[#444] hover:text-accent">
-                ↺
-              </button>
-            </div>
-            <span id="window-capture-label" class="block text-[11px] text-green mt-1 font-mono truncate max-w-[280px]"></span>
-          </div>
-          <div id="display-grid" class="display-grid flex gap-2.5 flex-wrap mb-2">
+        <!-- Source type tabs -->
+        <div style="display:flex; gap:0; margin-bottom:12px; border:1px solid #333; border-radius:4px; overflow:hidden;">
+          <button id="src-tab-display" class="src-tab active"
+            style="flex:1; padding:6px 10px; font-family:inherit; font-size:11px; letter-spacing:.05em; cursor:pointer; border:none; border-right:1px solid #333; transition:background .15s,color .15s; background:#1a1a1a; color:#c8c8c8;">
+            🖥 MÀN HÌNH
+          </button>
+          <button id="src-tab-window" class="src-tab"
+            style="flex:1; padding:6px 10px; font-family:inherit; font-size:11px; letter-spacing:.05em; cursor:pointer; border:none; transition:background .15s,color .15s; background:#111; color:#666;">
+            🪟 CỬA SỔ
+          </button>
+        </div>
+
+        <!-- DISPLAY panel -->
+        <div id="src-panel-display">
+          <div id="display-grid" style="display:flex; flex-direction:column; gap:8px; margin-bottom:8px;">
             <div class="display-card-loading text-dim italic text-xs py-3">Đang tải…</div>
           </div>
           <button id="refresh-previews"
             class="btn-secondary font-mono text-[10px] px-2.5 py-1 rounded border border-border bg-transparent text-dim cursor-pointer transition-all hover:border-[#444] hover:text-accent hover:bg-bg3">
-            ↺ Làm mới
+            ↺ Làm mới xem trước
           </button>
-        </section>
+        </div>
 
-        <!-- Controls -->
-        <section id="controls" aria-label="Điều khiển ghi" style="text-align:center; padding-top:4px;">
-          <div class="controls-center flex flex-col items-center gap-3">
-            <button id="rec-button"
-              class="rec-button w-[88px] h-[88px] rounded-full border-[3px] border-red bg-transparent text-red font-mono text-[12px] font-bold tracking-[0.1em] cursor-pointer flex flex-col items-center justify-center gap-1 transition-all outline-none hover:bg-red/[0.08] hover:shadow-[0_0_16px_rgba(255,60,60,0.3)]"
-              aria-label="Bắt đầu ghi">
-              <span class="rec-icon text-[24px] leading-none">●</span>
-              <span id="rec-label" class="rec-label">GHI</span>
+        <!-- WINDOW panel (hidden by default) -->
+        <div id="src-panel-window" class="hidden">
+          <div class="flex items-center gap-2 mb-2">
+            <input id="window-search" type="text" placeholder="🔍 Tìm cửa sổ..."
+              style="flex:1; background:#111; border:1px solid #333; border-radius:3px; padding:5px 8px; font-family:inherit; font-size:11px; color:#c8c8c8; outline:none;" />
+            <button id="refresh-windows"
+              class="font-mono text-[10px] px-2.5 py-1.5 rounded border border-border bg-transparent text-dim cursor-pointer hover:border-[#444] hover:text-accent shrink-0">
+              ↺
             </button>
-            <div id="timer" class="timer text-3xl font-bold tracking-[0.08em] text-accent tabular-nums" aria-live="polite">00:00:00</div>
-            <div id="recording-display-label" class="recording-display-label hidden text-red text-[0.75rem] font-mono"></div>
+          </div>
+          <!-- 2-column window grid -->
+          <div id="window-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+            <div style="color:#666; font-size:11px; font-style:italic; grid-column:span 2; padding:8px 0;">Đang tải…</div>
+          </div>
+          <!-- Preview -->
+          <div id="window-preview-container" class="hidden" style="margin-top:8px;">
+            <div style="font-size:10px; color:#555; margin-bottom:4px; letter-spacing:.08em; text-transform:uppercase;">Preview</div>
+            <div style="border:1px solid #333; border-radius:3px; overflow:hidden; background:#0a0a0a;">
+              <img id="window-preview-img" style="width:100%; height:auto; display:block;" alt="preview" />
+            </div>
+            <div id="window-preview-label" style="font-size:10px; color:#666; margin-top:3px; font-family:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+          </div>
+          <!-- Hidden fields kept for JS compat -->
+          <select id="window-select" style="display:none;"></select>
+          <span id="window-capture-label" style="display:none;"></span>
+        </div>
+
+      </div><!-- /source-panel -->
+
+      <!-- RIGHT: Controls + Meters + Options (scrollable) -->
+      <div style="flex:1; overflow-y:auto; padding:14px 16px; box-sizing:border-box; display:flex; flex-direction:column; gap:0;">
+
+        <!-- RECORD CONTROL -->
+        <section id="controls" aria-label="Điều khiển ghi" style="display:flex; align-items:center; gap:16px; margin-bottom:14px;">
+          <button id="rec-button"
+            class="rec-button w-[60px] h-[60px] rounded-full border-[2.5px] border-red bg-transparent text-red font-mono text-[10px] font-bold tracking-[0.1em] cursor-pointer flex flex-col items-center justify-center gap-0.5 transition-all outline-none hover:bg-red/[0.08] hover:shadow-[0_0_14px_rgba(255,60,60,0.3)] shrink-0"
+            aria-label="Bắt đầu ghi">
+            <span class="rec-icon text-[20px] leading-none">●</span>
+            <span id="rec-label" class="rec-label text-[9px]">GHI</span>
+          </button>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <div id="timer" class="timer text-2xl font-bold tracking-[0.08em] text-accent tabular-nums" aria-live="polite">00:00:00</div>
+            <div id="recording-display-label" class="recording-display-label hidden text-red text-[0.7rem] font-mono"></div>
+            <!-- Status dot inline -->
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span id="status-dot-inline" class="w-2 h-2 rounded-full bg-[#444] inline-block"></span>
+              <span id="status-label-inline" class="text-[10px] tracking-[0.12em] text-dim font-bold uppercase">SẴN SÀNG</span>
+            </div>
           </div>
         </section>
-      </div>
 
-      <!-- Divider -->
-      <div style="height:1px; background:#252525; margin-bottom:12px;"></div>
+        <div style="height:1px; background:#252525; margin-bottom:12px;"></div>
 
-      <!-- ROW B: Audio meters -->
-      <section id="meters" aria-label="Mức âm thanh" style="margin-bottom:12px;">
-        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
-          ♬ MỨC ÂM THANH
-        </h2>
-        <div class="meter-row flex items-center gap-3 mb-2">
-          <span class="meter-label w-[52px] text-[10px] font-bold tracking-[0.08em] text-dim shrink-0">🎤 Mic</span>
-          <div class="level-bar-track flex-1 h-1.5 bg-[#222] rounded border border-[#2a2a2a] overflow-hidden">
-            <div id="mic-bar" class="level-bar h-full bg-green rounded transition-[width] duration-75" style="width:0%"></div>
+        <!-- ROW B: Audio meters -->
+        <section id="meters" aria-label="Mức âm thanh" style="margin-bottom:12px;">
+          <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">♬ ÂM THANH</h2>
+          <div class="meter-row flex items-center gap-3 mb-2">
+            <span class="meter-label w-[42px] text-[10px] font-bold text-dim shrink-0">🎤 Mic</span>
+            <div class="level-bar-track flex-1 h-1.5 bg-[#222] rounded border border-[#2a2a2a] overflow-hidden">
+              <div id="mic-bar" class="level-bar h-full bg-green rounded transition-[width] duration-75" style="width:0%"></div>
+            </div>
+            <span id="mic-db" class="meter-db w-[46px] text-right text-[10px] text-dim shrink-0 tabular-nums">–∞</span>
           </div>
-          <span id="mic-db" class="meter-db w-[52px] text-right text-[10px] text-dim shrink-0 tabular-nums">–∞</span>
-        </div>
-        <div class="meter-row flex items-center gap-3">
-          <span class="meter-label w-[52px] text-[10px] font-bold tracking-[0.08em] text-dim shrink-0">🔊 Loa</span>
-          <div class="level-bar-track flex-1 h-1.5 bg-[#222] rounded border border-[#2a2a2a] overflow-hidden">
-            <div id="spk-bar" class="level-bar h-full bg-green rounded transition-[width] duration-75" style="width:0%"></div>
+          <div class="meter-row flex items-center gap-3">
+            <span class="meter-label w-[42px] text-[10px] font-bold text-dim shrink-0">🔊 Loa</span>
+            <div class="level-bar-track flex-1 h-1.5 bg-[#222] rounded border border-[#2a2a2a] overflow-hidden">
+              <div id="spk-bar" class="level-bar h-full bg-green rounded transition-[width] duration-75" style="width:0%"></div>
+            </div>
+            <span id="spk-db" class="meter-db w-[46px] text-right text-[10px] text-dim shrink-0 tabular-nums">–∞</span>
           </div>
-          <span id="spk-db" class="meter-db w-[52px] text-right text-[10px] text-dim shrink-0 tabular-nums">–∞</span>
-        </div>
-      </section>
+        </section>
 
-      <!-- Divider -->
-      <div style="height:1px; background:#252525; margin-bottom:12px;"></div>
+        <div style="height:1px; background:#252525; margin-bottom:12px;"></div>
 
-      <!-- ROW C: Inline quick options -->
-      <section style="margin-bottom:12px;">
-        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
-          ⚙ TÙY CHỌN NHANH
-        </h2>
-        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <!-- ROW C: Inline quick options -->
+        <section style="margin-bottom:12px;">
+          <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">⚙ TÙY CHỌN NHANH</h2>
+          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
           <div class="record-mode-group flex gap-2">
             <label class="mode-option">
               <input type="radio" name="record-mode" value="mp3_only" {% if config.record_mode_default == 'mp3_only' %}checked{% endif %} />
@@ -351,23 +394,24 @@
               <option value="3">3×</option>
             </select>
           </label>
-        </div>
-      </section>
+          </div>
+        </section>
 
-      <!-- ROW D: Job progress (hidden by default) -->
-      <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
-        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
-          ⚡ XỬ LÝ — CHI TIẾT
-        </h2>
-        <div class="step-indicator bg-green/10 border border-green text-green px-3 py-1.5 rounded font-bold text-[12px] text-center mb-2 tracking-[0.05em]"
-             id="step-indicator">Bước — / —</div>
-        <div id="log-container"
-             class="log-container bg-bg3 text-[#e0e0e0] rounded-md p-2 overflow-y-auto font-mono text-[11px] leading-relaxed border border-border"
-             style="max-height:160px;">
-          <div class="log-entry">⏳ Bắt đầu xử lý...</div>
-        </div>
-      </section>
+        <!-- ROW D: Job progress (hidden by default) -->
+        <section id="job-progress" class="hidden" aria-label="Tiến độ xử lý">
+          <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
+            ⚡ XỬ LÝ — CHI TIẾT
+          </h2>
+          <div class="step-indicator bg-green/10 border border-green text-green px-3 py-1.5 rounded font-bold text-[12px] text-center mb-2 tracking-[0.05em]"
+               id="step-indicator">Bước — / —</div>
+          <div id="log-container"
+               class="log-container bg-bg3 text-[#e0e0e0] rounded-md p-2 overflow-y-auto font-mono text-[11px] leading-relaxed border border-border"
+               style="max-height:140px;">
+            <div class="log-entry">⏳ Bắt đầu xử lý...</div>
+          </div>
+        </section>
 
+      </div><!-- /right panel -->
     </div><!-- /tab-panel-0 -->
 
 
