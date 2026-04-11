@@ -133,10 +133,10 @@ class RecordingSession:
         self._do_rollover()
 
     def switch_window(self, region: dict) -> None:
-        """Chuyển sang ghi cửa sổ khác khi đang record. Rollover segment tực thì."""
+        """Chuyển sang ghi cửa sổ khác khi đang record. Lưu segment hiện tại trước, rồi mới chuyển."""
         logger.info("[Session] Chuyển cửa sổ ghi → '%s'", region.get('title', ''))
-        self.video.switch_region(region)
-        self._do_rollover()
+        self._do_rollover()           # 1. Lưu segment cũ trước
+        self.video.switch_region(region)  # 2. Sau đó mới set pending region
 
     # ------------------------------------------------------------------
     def stop(self, merge_audio: bool = True, convert_mp3: bool = True,

@@ -135,11 +135,19 @@ class VideoEngine:
 
     # ------------------------------------------------------------------
     def _capture_loop(self) -> None:
-        """Vòng lặp ngoài: xử lý nhiều segment khi chuyển màn hình."""
-        # Nếu có region (window capture), dùng mss với region
+        """Vòng lặp ngoài: xử lý nhiều segment khi chuyển màn hình hoặc cửa sổ."""
+        # Nếu bắt đầu ở chế độ region (window capture)
         if self.region:
             self._record_segments_region()
-            return
+            # Sau khi region kết thúc, kiểm tra xem có chuyển sang display không
+            if self._pending_display is not None:
+                self.display_index = self._pending_display
+                self._pending_display = None
+                self.region = None
+                # fall through để chạy vòng lặp display
+            else:
+                logger.info("[VideoEngine] Ghi xong: %d frames tổng.", self.frame_count)
+                return
 
         while self.recording:
             path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
@@ -149,7 +157,20 @@ class VideoEngine:
             if result is None:
                 result = self._record_segment_mss(path, self.display_index)
 
-            if self._pending_display is not None:
+            if self._pending_region is not None:
+                # Chuyển sang chế độ window capture
+                self.region = self._pending_region
+                self._pending_region = None
+                self._record_segments_region()
+                # Sau khi region kết thúc, kiểm tra xem có chuyển lại display không
+                if self._pending_display is not None:
+                    self.display_index = self._pending_display
+                    self._pending_display = None
+                    self.region = None
+                    # Tiếp tục vòng lặp display
+                else:
+                    break
+            elif self._pending_display is not None:
                 self.display_index = self._pending_display
                 self._pending_display = None
                 # Không break, chỉ loop lại để mở dxcam với display mới
@@ -166,7 +187,7 @@ class VideoEngine:
         """Capture cửa sổ/vùng màn hình.
         Nếu tìm được HWND (Windows), dùng PrintWindow — hoạt động kể cả khi cửa sổ bị che/inactive.
         Fallback sang mss region capture khi không tìm được HWND.
-        Hỗ trợ switch_region() ngay trong khi đang ghi.
+        Hỗ trợ switch_region() và switch_display() ngay trong khi đang ghi.
         """
         import numpy as np
         # Vòng ngoài: chạy lại khi có pending_region
@@ -174,9 +195,12 @@ class VideoEngine:
             self._pending_region = None
             self._run_region_loop(np)
             if self._pending_region is not None:
-                # Cập nhật region và tiếp tục
+                # Cập nhật region và tiếp tục ghi cửa sổ mới
                 self.region = self._pending_region
                 continue
+            elif self._pending_display is not None:
+                # Chuyển sang chế độ display — thoát để _capture_loop xử lý
+                break
             break
 
     def _run_region_loop(self, np) -> None:
@@ -235,6 +259,11 @@ class VideoEngine:
                     if self._rollover_request.is_set():
                         writer, path = _do_rollover(writer, path)
                         next_deadline = time.perf_counter()
+                        if self._pending_display is not None:
+                            break  # segment saved; exit so _capture_loop can switch display
+
+                    if self._pending_display is not None:
+                        break  # display switch requested but no rollover yet — exit cleanly
 
                     frame = VideoEngine._grab_hwnd_bgr(hwnd, w, h)
                     if frame is None:
@@ -266,6 +295,11 @@ class VideoEngine:
                         if self._rollover_request.is_set():
                             writer, path = _do_rollover(writer, path)
                             next_deadline = time.perf_counter()
+                            if self._pending_display is not None:
+                                break  # segment saved; exit so _capture_loop can switch display
+
+                        if self._pending_display is not None:
+                            break  # display switch requested but no rollover yet — exit cleanly
 
                         img = sct.grab(mss_monitor)
                         frame = np.array(img, dtype=np.uint8)
@@ -292,6 +326,20 @@ class VideoEngine:
         except Exception as exc:
             logger.error("[VideoEngine] Window region capture lỗi: %s", exc)
         finally:
+            # Safety net: if the loop exited before processing a pending rollover request,
+            # service it now so roll_segment() doesn't time out.
+            if self._rollover_request.is_set():
+                try:
+                    self._completed_segment = {
+                        "video": str(path),
+                        "frame_count": self._seg_frame_count,
+                    }
+                    self.current_seg_idx += 1
+                    self._seg_frame_count = 0
+                    self._rollover_request.clear()
+                    self._rollover_done.set()
+                except Exception:
+                    pass
             if writer is not None:
                 writer.release()
 
@@ -407,7 +455,7 @@ class VideoEngine:
                     self.current_seg_idx += 1
                     path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
                     
-                    if self._pending_display is not None:
+                    if self._pending_display is not None or self._pending_region is not None:
                         writer = None
                         self._rollover_request.clear()
                         self._rollover_done.set()
@@ -499,7 +547,7 @@ class VideoEngine:
                         self.current_seg_idx += 1
                         path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
                         
-                        if self._pending_display is not None:
+                        if self._pending_display is not None or self._pending_region is not None:
                             writer = None
                             self._rollover_request.clear()
                             self._rollover_done.set()

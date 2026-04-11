@@ -712,8 +712,25 @@ def api_windows():
     user32 = ctypes.windll.user32
     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
 
-    _WS_VISIBLE   = 0x10000000
     _WS_EX_TOOLWINDOW = 0x00000080
+    _WS_EX_APPWINDOW  = 0x00040000
+    _DWMWA_CLOAKED    = 14
+
+    try:
+        dwmapi = ctypes.windll.dwmapi
+    except Exception:
+        dwmapi = None
+
+    class _WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [
+            ("length",            ctypes.c_uint),
+            ("flags",             ctypes.c_uint),
+            ("showCmd",           ctypes.c_uint),
+            ("ptMinPosition",     ctypes.wintypes.POINT),
+            ("ptMaxPosition",     ctypes.wintypes.POINT),
+            ("rcNormalPosition",  ctypes.wintypes.RECT),
+        ]
+
     buf = ctypes.create_unicode_buffer(512)
     windows = []
 
@@ -726,22 +743,42 @@ def api_windows():
         title = buf.value.strip()
         if not title:
             return True
-        # Bỏ qua tool windows (tooltip, tray popup, v.v.)
+        # Bỏ qua tool windows (tooltip, tray popup) — nhưng giữ lại những cái có WS_EX_APPWINDOW
         ex_style = user32.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
-        if ex_style & _WS_EX_TOOLWINDOW:
+        if (ex_style & _WS_EX_TOOLWINDOW) and not (ex_style & _WS_EX_APPWINDOW):
             return True
-        # Lấy kích thước vùng client
+        # Bỏ qua cửa sổ bị ẩn bởi virtual desktop (cloaked)
+        if dwmapi:
+            try:
+                cloaked = ctypes.c_int(0)
+                dwmapi.DwmGetWindowAttribute(hwnd, _DWMWA_CLOAKED,
+                                             ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+                if cloaked.value:
+                    return True
+            except Exception:
+                pass
+        # Lấy kích thước cửa sổ
         rect = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         w = rect.right  - rect.left
         h = rect.bottom - rect.top
-        if w < 100 or h < 100:
+        left, top = rect.left, rect.top
+        # Nếu cửa sổ đang thu nhỏ (minimized), lấy kích thước thực từ WindowPlacement
+        if user32.IsIconic(hwnd):
+            wp = _WINDOWPLACEMENT()
+            wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+            if user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+                w = wp.rcNormalPosition.right  - wp.rcNormalPosition.left
+                h = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top
+                left = wp.rcNormalPosition.left
+                top  = wp.rcNormalPosition.top
+        if w < 50 or h < 50:
             return True
         windows.append({
             "hwnd":  hwnd,
             "title": title,
-            "left":  rect.left,
-            "top":   rect.top,
+            "left":  left,
+            "top":   top,
             "width": w,
             "height": h,
         })
@@ -804,13 +841,37 @@ def api_window_preview():
     ph = ph if ph % 2 == 0 else ph + 1
 
     try:
-        # PrintWindow capture
+        # 1. Try PrintWindow capture first
         from recorder.video_engine import VideoEngine, _BITMAPINFOHEADER
-        frame_full = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
-        if frame_full is None:
-            return jsonify({"ok": False, "error": "Không capture được"}), 500
-
         import cv2, base64, numpy as np
+        frame_full = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
+
+        # 2. Check if result is black (GPU/hardware-accelerated apps like Teams, Edge)
+        is_black = frame_full is None or (
+            frame_full is not None and frame_full.mean() < 2.0
+        )
+
+        if is_black:
+            # Fallback: mss screen grab of the window bounding rect
+            try:
+                import mss as _mss
+                rect = ctypes.wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                mon = {
+                    "left":   rect.left,
+                    "top":    rect.top,
+                    "width":  max(rect.right  - rect.left, 1),
+                    "height": max(rect.bottom - rect.top,  1),
+                }
+                with _mss.mss() as sct:
+                    shot = sct.grab(mon)
+                arr = np.array(shot, dtype=np.uint8)
+                frame_full = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+            except Exception as mss_exc:
+                logger.warning("[WindowPreview] mss fallback lỗi: %s", mss_exc)
+                if frame_full is None:
+                    return jsonify({"ok": False, "error": "Không capture được cửa sổ"}), 500
+
         frame_small = cv2.resize(frame_full, (pw, ph))
         _, buf_enc = cv2.imencode(".jpg", frame_small, [cv2.IMWRITE_JPEG_QUALITY, 80])
         b64 = base64.b64encode(buf_enc.tobytes()).decode()
