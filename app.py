@@ -172,6 +172,7 @@ def api_start():
                     "top":    int(wr["top"]),
                     "width":  int(wr["width"]),
                     "height": int(wr["height"]),
+                    "title":  str(wr.get("title", "")),
                 }
                 if window_region["width"] <= 0 or window_region["height"] <= 0:
                     window_region = None

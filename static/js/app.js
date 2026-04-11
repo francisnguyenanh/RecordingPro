@@ -261,6 +261,7 @@ async function startRecording() {
         top:    state.selectedWindow.top,
         width:  state.selectedWindow.width,
         height: state.selectedWindow.height,
+        title:  state.selectedWindow.title || "",
       };
     }
     const res = await fetch("/api/start", {

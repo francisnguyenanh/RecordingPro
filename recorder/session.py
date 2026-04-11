@@ -3,6 +3,7 @@ session.py — v2: Điều phối RecordingSession với hỗ trợ chọn màn 
 """
 import concurrent.futures
 import logging
+import re
 import subprocess
 import sys
 import threading
@@ -41,12 +42,17 @@ class RecordingSession:
                  detected_app: str = None, mic_device: int = None,
                  window_region: dict = None):
         self._output_dir: Path = output_dir or OUTPUT_DIR
-        # P3: Auto-naming — thêm tên app đang gọi vào session_id
-        if detected_app:
-            safe_name = detected_app.replace(" ", "_")
-            self.session_id: str = f"{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Auto-naming: ưu tiên detected_app, sau đó window title, cuối cùng dùng timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        name_source = (
+            detected_app
+            or (window_region.get("title") if window_region else None)
+        )
+        if name_source:
+            safe_name = re.sub(r'[^\w\-]', '_', name_source)[:40].strip('_')
+            self.session_id: str = f"{safe_name}_{timestamp}"
         else:
-            self.session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.session_id: str = timestamp
         self.audio = AudioEngine(self.session_id, output_dir=self._output_dir,
                                  mic_device=mic_device)
         self.video = VideoEngine(self.session_id, display_index=display_index,

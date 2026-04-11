@@ -3,11 +3,34 @@ video_engine.py — v2: Ghi màn hình với hỗ trợ chọn màn hình (displ
 Hỗ trợ chuyển đổi màn hình ghi ngay trong khi đang ghi (multi-segment).
 """
 import logging
+import sys
 import threading
 import time
 from pathlib import Path
 
 import cv2
+
+# Windows-only: pre-build BITMAPINFOHEADER struct for PrintWindow capture
+if sys.platform == "win32":
+    import ctypes as _ct
+
+    class _BITMAPINFOHEADER(_ct.Structure):
+        _fields_ = [
+            ("biSize",          _ct.c_uint32),
+            ("biWidth",         _ct.c_int32),
+            ("biHeight",        _ct.c_int32),
+            ("biPlanes",        _ct.c_uint16),
+            ("biBitCount",      _ct.c_uint16),
+            ("biCompression",   _ct.c_uint32),
+            ("biSizeImage",     _ct.c_uint32),
+            ("biXPelsPerMeter", _ct.c_int32),
+            ("biYPelsPerMeter", _ct.c_int32),
+            ("biClrUsed",       _ct.c_uint32),
+            ("biClrImportant",  _ct.c_uint32),
+        ]
+    del _ct
+else:
+    _BITMAPINFOHEADER = None
 
 logger = logging.getLogger(__name__)
 
@@ -132,59 +155,64 @@ class VideoEngine:
 
     # ------------------------------------------------------------------
     def _record_segments_region(self) -> None:
-        """Capture theo vùng cửa sổ (window region) bằng mss, hỗ trợ multi-segment."""
-        import mss  # type: ignore
+        """Capture cửa sổ/vùng màn hình.
+        Nếu tìm được HWND (Windows), dùng PrintWindow — hoạt động kể cả khi cửa sổ bị che/inactive.
+        Fallback sang mss region capture khi không tìm được HWND.
+        """
         import numpy as np
 
         r = self.region
-        mss_monitor = {
-            "left": int(r.get("left", 0)),
-            "top": int(r.get("top", 0)),
-            "width": int(r.get("width", 1280)),
-            "height": int(r.get("height", 720)),
-        }
-        w, h = mss_monitor["width"], mss_monitor["height"]
-        # Đảm bảo width/height chẵn (yêu cầu của VideoWriter H.264)
+        title = r.get("title", "") if r else ""
+        w = int(r.get("width", 1280))
+        h = int(r.get("height", 720))
         w = w if w % 2 == 0 else w - 1
         h = h if h % 2 == 0 else h - 1
-        mss_monitor["width"] = w
-        mss_monitor["height"] = h
 
-        writer: cv2.VideoWriter | None = None
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
         def _open_writer(path: Path) -> cv2.VideoWriter:
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             return cv2.VideoWriter(str(path), fourcc, TARGET_FPS, (w, h))
 
-        try:
-            with mss.mss() as sct:
-                path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
-                writer = _open_writer(path)
-                self.start_timestamp = time.perf_counter()
-                self._seg_frame_count = 0
-                next_deadline = time.perf_counter()
+        def _do_rollover(wr, p):
+            """Đóng writer hiện tại, lưu segment info, mở writer mới."""
+            wr.release()
+            self._completed_segment = {"video": str(p), "frame_count": self._seg_frame_count}
+            self.current_seg_idx += 1
+            new_path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
+            new_wr = _open_writer(new_path)
+            self.start_timestamp = time.perf_counter()
+            self._seg_frame_count = 0
+            self._rollover_request.clear()
+            self._rollover_done.set()
+            return new_wr, new_path
 
+        # Tìm HWND để dùng PrintWindow (background capture)
+        hwnd = None
+        if title and sys.platform == "win32":
+            hwnd = VideoEngine._find_hwnd(title)
+            if hwnd:
+                logger.info("[VideoEngine] PrintWindow mode: '%s' (hwnd=%d)", title, hwnd)
+            else:
+                logger.info("[VideoEngine] Không tìm được HWND cho '%s', dùng mss.", title)
+
+        path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
+        writer = _open_writer(path)
+        self.start_timestamp = time.perf_counter()
+        self._seg_frame_count = 0
+        next_deadline = time.perf_counter()
+
+        try:
+            if hwnd:
+                # ── PrintWindow capture (hoạt động kể cả khi cửa sổ bị che/inactive) ──
                 while self.recording:
                     if self._rollover_request.is_set():
-                        if writer is not None:
-                            writer.release()
-                        self._completed_segment = {
-                            "video": str(path),
-                            "frame_count": self._seg_frame_count,
-                        }
-                        self.current_seg_idx += 1
-                        path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
-                        writer = _open_writer(path)
-                        self.start_timestamp = time.perf_counter()
-                        self._seg_frame_count = 0
+                        writer, path = _do_rollover(writer, path)
                         next_deadline = time.perf_counter()
-                        self._rollover_request.clear()
-                        self._rollover_done.set()
 
-                    img = sct.grab(mss_monitor)
-                    frame = np.array(img, dtype=np.uint8)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                    # Resize nếu cần đảm bảo đúng kích thước
+                    frame = VideoEngine._grab_hwnd_bgr(hwnd, w, h)
+                    if frame is None:
+                        time.sleep(0.016)
+                        continue
                     if frame.shape[1] != w or frame.shape[0] != h:
                         frame = cv2.resize(frame, (w, h))
                     writer.write(frame)
@@ -195,20 +223,112 @@ class VideoEngine:
                     sleep_t = next_deadline - time.perf_counter()
                     if sleep_t > 0:
                         time.sleep(sleep_t)
-                    elif sleep_t < -FRAME_INTERVAL:
-                        missed = int(-sleep_t / FRAME_INTERVAL)
-                        for _ in range(missed):
-                            writer.write(frame)
-                            self.frame_count += 1
-                            self._seg_frame_count += 1
-                        next_deadline += missed * FRAME_INTERVAL
-                        if (time.perf_counter() - next_deadline) > FRAME_INTERVAL:
+                    else:
+                        next_deadline = time.perf_counter()
+            else:
+                # ── mss region capture (fallback) ──
+                import mss  # type: ignore
+                mss_monitor = {
+                    "left":   int(r.get("left", 0)),
+                    "top":    int(r.get("top", 0)),
+                    "width":  w,
+                    "height": h,
+                }
+                with mss.mss() as sct:
+                    while self.recording:
+                        if self._rollover_request.is_set():
+                            writer, path = _do_rollover(writer, path)
                             next_deadline = time.perf_counter()
+
+                        img = sct.grab(mss_monitor)
+                        frame = np.array(img, dtype=np.uint8)
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                        if frame.shape[1] != w or frame.shape[0] != h:
+                            frame = cv2.resize(frame, (w, h))
+                        writer.write(frame)
+                        self.frame_count += 1
+                        self._seg_frame_count += 1
+
+                        next_deadline += FRAME_INTERVAL
+                        sleep_t = next_deadline - time.perf_counter()
+                        if sleep_t > 0:
+                            time.sleep(sleep_t)
+                        elif sleep_t < -FRAME_INTERVAL:
+                            missed = int(-sleep_t / FRAME_INTERVAL)
+                            for _ in range(missed):
+                                writer.write(frame)
+                                self.frame_count += 1
+                                self._seg_frame_count += 1
+                            next_deadline += missed * FRAME_INTERVAL
+                            if (time.perf_counter() - next_deadline) > FRAME_INTERVAL:
+                                next_deadline = time.perf_counter()
         except Exception as exc:
             logger.error("[VideoEngine] Window region capture lỗi: %s", exc)
         finally:
             if writer is not None:
                 writer.release()
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _find_hwnd(title: str) -> int | None:
+        """Tìm HWND từ tiêu đề cửa sổ (partial match). Chỉ dùng trên Windows."""
+        try:
+            import pygetwindow as gw
+            for w in gw.getAllWindows():
+                if w.title and title.lower() in w.title.lower():
+                    hwnd = getattr(w, '_hWnd', None)
+                    if hwnd:
+                        return int(hwnd)
+        except Exception:
+            pass
+        # Fallback: ctypes exact-match
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.FindWindowW(None, title)
+            return int(hwnd) if hwnd else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _grab_hwnd_bgr(hwnd: int, width: int, height: int):
+        """Capture nội dung cửa sổ qua PrintWindow API.
+        Hoạt động kể cả khi cửa sổ bị che hoặc không active.
+        Trả về numpy array BGR hoặc None nếu thất bại.
+        """
+        import ctypes
+        import numpy as np
+
+        user32 = ctypes.windll.user32
+        gdi32  = ctypes.windll.gdi32
+
+        hdc_win = user32.GetWindowDC(hwnd)
+        if not hdc_win:
+            return None
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_win)
+        hbmp    = gdi32.CreateCompatibleBitmap(hdc_win, width, height)
+        gdi32.SelectObject(hdc_mem, hbmp)
+
+        # PW_RENDERFULLCONTENT = 0x2 — yêu cầu render đầy đủ (DWM composited)
+        PW_RENDERFULLCONTENT = 0x2
+        user32.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT)
+
+        bmi = _BITMAPINFOHEADER()
+        bmi.biSize        = ctypes.sizeof(_BITMAPINFOHEADER)
+        bmi.biWidth       = width
+        bmi.biHeight      = -height   # âm = top-down (không bị lật ngược)
+        bmi.biPlanes      = 1
+        bmi.biBitCount    = 32
+        bmi.biCompression = 0         # BI_RGB
+
+        buf = (ctypes.c_uint8 * (width * height * 4))()
+        gdi32.GetDIBits(hdc_mem, hbmp, 0, height, buf, ctypes.byref(bmi), 0)
+
+        gdi32.DeleteObject(hbmp)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(hwnd, hdc_win)
+
+        arr = np.frombuffer(buf, dtype=np.uint8).reshape((height, width, 4))
+        return arr[:, :, :3].copy()  # BGRA → BGR
 
     # ------------------------------------------------------------------
     def _record_segment_dxcam(
