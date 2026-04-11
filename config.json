@@ -8,5 +8,8 @@
   "speaker_gain": 1,
   "output_dir": null,
   "tray_start_minimized": false,
-  "auto_start_with_windows": false
+  "auto_start_with_windows": false,
+  "mic_device_index": null,
+  "global_hotkey_enabled": true,
+  "schedule_delay_minutes": 0
 }

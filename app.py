@@ -40,6 +40,9 @@ DEFAULT_CONFIG: dict = {
     "mic_gain": 1,
     "speaker_gain": 1,
     "output_dir": None,
+    "mic_device_index": None,
+    "global_hotkey_enabled": True,
+    "schedule_delay_minutes": 0,
 }
 
 # ══════════════════════════════════════════════════════════════════════
@@ -74,6 +77,9 @@ current_session: Optional[object] = None
 app_state: Literal["idle", "recording", "processing"] = "idle"
 _recording_start_time: float = 0.0
 popup_pending: bool = False    # Đang hiển thị modal hỏi người dùng
+_last_detected_app: Optional[str] = None  # P3: Tên app vừa detect được
+_schedule_timer: Optional[threading.Timer] = None
+_schedule_lock = threading.Lock()
 
 # ── CallDetector & DisplayManager singletons ─────────────────────────
 from recorder.call_detector import CallDetector
@@ -88,12 +94,13 @@ _detector: Optional[CallDetector] = None
 # ══════════════════════════════════════════════════════════════════════
 
 def _on_call_start(app_name: str) -> None:
-    global popup_pending
+    global popup_pending, _last_detected_app
     with _state_lock:
         if popup_pending:
             logger.debug("[Detector] Popup đang mở, bỏ qua sự kiện trùng lặp.")
             return
         popup_pending = True
+        _last_detected_app = app_name
     logger.info("[Detector] Phát hiện cuộc gọi: %s → emit call_detected", app_name)
     socketio.emit("call_detected", {"app_name": app_name})
 
@@ -152,8 +159,12 @@ def api_start():
         data = request.get_json(silent=True) or {}
         display_index = int(data.get("display_index", 1))
 
+        cfg = load_config()
+        mic_device = cfg.get("mic_device_index")
+
         from recorder.session import RecordingSession
-        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR)
+        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR,
+                                   mic_device=mic_device)
         try:
             session.start()
         except Exception as exc:
@@ -305,6 +316,10 @@ def api_files():
 @app.route("/api/download/<name>", methods=["GET"])
 def api_download(name: str):
     path = OUTPUT_DIR / name
+    try:
+        path.resolve().relative_to(OUTPUT_DIR.resolve())
+    except ValueError:
+        return jsonify({"error": "Đường dẫn không hợp lệ."}), 400
     if not path.exists() or not path.is_file():
         return jsonify({"error": "File không tồn tại."}), 404
     return send_file(str(path), as_attachment=True)
@@ -584,9 +599,8 @@ def on_confirm_record():
     cfg = load_config()
     display_index = int(cfg.get("default_display_index", 1))
 
-    # Trigger start recording via internal call
-    from recorder.session import RecordingSession
-    _start_session(display_index=display_index)
+    # P3: truyền tên app detected cho auto-naming
+    _start_session(display_index=display_index, detected_app=_last_detected_app)
 
 
 @socketio.on("dismiss_call_popup")
@@ -598,16 +612,128 @@ def on_dismiss_call_popup():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ROUTES — Audio Devices (P3)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/audio-devices", methods=["GET"])
+def api_audio_devices():
+    """Liệt kê thiết bị âm thanh để user chọn mic/speaker."""
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        result = []
+        for i, d in enumerate(devices):
+            result.append({
+                "index": i,
+                "name": d["name"],
+                "max_input_channels": d["max_input_channels"],
+                "max_output_channels": d["max_output_channels"],
+                "default_samplerate": d["default_samplerate"],
+                "is_input": d["max_input_channels"] > 0,
+                "is_output": d["max_output_channels"] > 0,
+            })
+        di, do = sd.default.device
+        return jsonify({"devices": result, "default_input": di, "default_output": do})
+    except Exception as exc:
+        logger.warning("[AudioDevices] %s", exc)
+        return jsonify({"devices": [], "error": str(exc)})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Windows List (P3 — region capture)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/windows", methods=["GET"])
+def api_windows():
+    """Liệt kê cửa sổ đang mở để chọn ghi theo cửa sổ."""
+    try:
+        import pygetwindow as gw
+        windows = []
+        for w in gw.getAllWindows():
+            if w.title and w.visible and w.width > 100 and w.height > 100:
+                windows.append({
+                    "title": w.title,
+                    "left": w.left, "top": w.top,
+                    "width": w.width, "height": w.height,
+                })
+        return jsonify(windows)
+    except Exception as exc:
+        logger.warning("[Windows] %s", exc)
+        return jsonify([])
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Schedule (P3)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/schedule", methods=["POST"])
+def api_schedule():
+    """Hẹn giờ bắt đầu hoặc dừng ghi."""
+    global _schedule_timer
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")  # "start_after" | "stop_after" | "cancel"
+    delay_seconds = int(data.get("delay_seconds", 0))
+
+    if action == "cancel":
+        with _schedule_lock:
+            if _schedule_timer:
+                _schedule_timer.cancel()
+                _schedule_timer = None
+        socketio.emit("schedule_event", {"type": "cancelled"})
+        return jsonify({"ok": True, "message": "Đã hủy hẹn giờ."})
+
+    if action == "start_after" and delay_seconds > 0:
+        def _scheduled_start():
+            global _schedule_timer
+            cfg = load_config()
+            _start_session(display_index=cfg.get("default_display_index", 1))
+            with _schedule_lock:
+                _schedule_timer = None
+            socketio.emit("schedule_event", {"type": "started"})
+
+        with _schedule_lock:
+            if _schedule_timer:
+                _schedule_timer.cancel()
+            _schedule_timer = threading.Timer(delay_seconds, _scheduled_start)
+            _schedule_timer.daemon = True
+            _schedule_timer.start()
+        socketio.emit("schedule_event", {"type": "scheduled_start", "delay": delay_seconds})
+        return jsonify({"ok": True, "message": f"Hẹn ghi sau {delay_seconds}s"})
+
+    if action == "stop_after" and delay_seconds > 0:
+        def _scheduled_stop():
+            global _schedule_timer
+            with _schedule_lock:
+                _schedule_timer = None
+            # Emit signal to trigger stop from client side
+            socketio.emit("schedule_event", {"type": "auto_stop"})
+
+        with _schedule_lock:
+            if _schedule_timer:
+                _schedule_timer.cancel()
+            _schedule_timer = threading.Timer(delay_seconds, _scheduled_stop)
+            _schedule_timer.daemon = True
+            _schedule_timer.start()
+        socketio.emit("schedule_event", {"type": "scheduled_stop", "delay": delay_seconds})
+        return jsonify({"ok": True, "message": f"Hẹn dừng sau {delay_seconds}s"})
+
+    return jsonify({"ok": False, "error": "Action không hợp lệ."}), 400
+
+
+# ══════════════════════════════════════════════════════════════════════
 # INTERNAL HELPERS
 # ══════════════════════════════════════════════════════════════════════
 
-def _start_session(display_index: int = 1) -> None:
+def _start_session(display_index: int = 1, detected_app: str = None) -> None:
     global current_session, app_state, _recording_start_time
     with _state_lock:
         if app_state != "idle":
             return
+        cfg = load_config()
+        mic_device = cfg.get("mic_device_index")
         from recorder.session import RecordingSession
-        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR)
+        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR,
+                                   detected_app=detected_app, mic_device=mic_device)
         try:
             session.start()
         except Exception as exc:
@@ -667,4 +793,4 @@ if __name__ == "__main__":
     _on_startup()
     logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
     #socketio.run(app, host="127.0.0.1", port=5004)
-    socketio.run(app, host="127.0.0.1", port=5011, debug=True)
+    socketio.run(app, host="127.0.0.1", port=5010, debug=True)

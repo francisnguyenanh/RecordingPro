@@ -84,28 +84,29 @@ const SILENCE_CFG = {
 
 let _lastMicLevel = 0;
 let _lastSpkLevel = 0;
-let _silenceSeconds = 0;
+let _silenceStartMs = 0;        // P1: timestamp-based instead of tick
 let _silenceInterval = null;
 let _silenceToastTimer = null;
 let _silenceNotified = false;
 
 function startSilenceMonitoring() {
-  _silenceSeconds = 0;
   _silenceNotified = false;
   _lastMicLevel = 0;
   _lastSpkLevel = 0;
+  _silenceStartMs = Date.now();
   if (_silenceInterval) clearInterval(_silenceInterval);
   _silenceInterval = setInterval(() => {
     const isSilent = _lastMicLevel < SILENCE_CFG.THRESHOLD &&
                      _lastSpkLevel < SILENCE_CFG.THRESHOLD;
     if (isSilent) {
-      _silenceSeconds++;
-      if (_silenceSeconds >= SILENCE_CFG.WARNING_AFTER_S && !_silenceNotified) {
+      // P1: Use real elapsed time (immune to tab throttling)
+      const elapsedS = (Date.now() - _silenceStartMs) / 1000;
+      if (elapsedS >= SILENCE_CFG.WARNING_AFTER_S && !_silenceNotified) {
         _silenceNotified = true;
         showSilenceToast();
       }
     } else {
-      _silenceSeconds = 0;
+      _silenceStartMs = Date.now();
       _silenceNotified = false;
       dismissSilenceToast();
     }
@@ -114,7 +115,7 @@ function startSilenceMonitoring() {
 
 function stopSilenceMonitoring() {
   if (_silenceInterval) { clearInterval(_silenceInterval); _silenceInterval = null; }
-  _silenceSeconds = 0;
+  _silenceStartMs = 0;
   _silenceNotified = false;
   dismissSilenceToast();
 }
@@ -346,7 +347,7 @@ document.getElementById("silence-stop").addEventListener("click", () => { dismis
 document.getElementById("silence-continue").addEventListener("click", () => {
   dismissSilenceToast();
   // reset silence counter so it can warn again after another 3 minutes
-  _silenceSeconds = 0;
+  _silenceStartMs = Date.now();
   _silenceNotified = false;
 });
 
@@ -541,7 +542,7 @@ socket.on("display_switched", ({ display_index }) => {
 // ══════════════════════════════════════════════════════════════════════
 async function loadFiles() {
   try {
-    const res = await fetch("/api/files");
+    const res = await fetch("/api/files?per_page=200");
     const data = await res.json();
     renderFiles(data.files || []);
   } catch (err) {
@@ -801,6 +802,11 @@ document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
       const modeRadio = document.querySelector(`input[name="record-mode"][value="${cfg.record_mode_default}"]`);
       if (modeRadio) modeRadio.checked = true;
     }
+    // P3: Load mic device selection
+    const micDevSel = document.getElementById("mic-device-select");
+    if (micDevSel && cfg.mic_device_index != null) {
+      micDevSel.value = cfg.mic_device_index;
+    }
   } catch (_) {}
 
   // Restore status
@@ -812,4 +818,138 @@ document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
 
   await loadDisplays();
   await loadFiles();
+  await loadAudioDevices();
 })();
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: KEYBOARD SHORTCUTS
+// ══════════════════════════════════════════════════════════════════════
+document.addEventListener("keydown", (e) => {
+  // Ctrl+Shift+R → toggle recording (browser shortcut)
+  if (e.ctrlKey && e.shiftKey && e.key === "R") {
+    e.preventDefault();
+    if (state.appState === "idle") startRecording();
+    else if (state.appState === "recording") stopRecording();
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: AUDIO DEVICE SELECTION
+// ══════════════════════════════════════════════════════════════════════
+async function loadAudioDevices() {
+  const sel = document.getElementById("mic-device-select");
+  if (!sel) return;
+  try {
+    const res = await fetch("/api/audio-devices");
+    const data = await res.json();
+    sel.innerHTML = '<option value="">— Mặc định —</option>';
+    for (const d of (data.devices || [])) {
+      if (d.is_input) {
+        const opt = document.createElement("option");
+        opt.value = d.index;
+        opt.textContent = d.name;
+        sel.appendChild(opt);
+      }
+    }
+    // Restore saved selection
+    const cfgRes = await fetch("/api/config");
+    const cfg = await cfgRes.json();
+    if (cfg.mic_device_index != null) sel.value = cfg.mic_device_index;
+  } catch (_) {}
+}
+
+const micDevSel = document.getElementById("mic-device-select");
+if (micDevSel) {
+  micDevSel.addEventListener("change", (e) => {
+    const val = e.target.value === "" ? null : parseInt(e.target.value);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mic_device_index: val }),
+    }).catch(() => {});
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: SCHEDULE RECORDING
+// ══════════════════════════════════════════════════════════════════════
+let _scheduleCountdown = null;
+
+const btnScheduleStart = document.getElementById("btn-schedule-start");
+const btnScheduleStop  = document.getElementById("btn-schedule-stop");
+const btnScheduleCancel = document.getElementById("btn-schedule-cancel");
+const scheduleStatus   = document.getElementById("schedule-status");
+
+if (btnScheduleStart) {
+  btnScheduleStart.addEventListener("click", async () => {
+    const mins = parseInt(document.getElementById("schedule-delay").value) || 0;
+    if (mins <= 0) { alert("Nhập số phút > 0"); return; }
+    try {
+      await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start_after", delay_seconds: mins * 60 }),
+      });
+    } catch (err) { alert("Lỗi: " + err.message); }
+  });
+}
+
+if (btnScheduleStop) {
+  btnScheduleStop.addEventListener("click", async () => {
+    const mins = parseInt(document.getElementById("schedule-delay").value) || 0;
+    if (mins <= 0) { alert("Nhập số phút > 0"); return; }
+    try {
+      await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stop_after", delay_seconds: mins * 60 }),
+      });
+    } catch (err) { alert("Lỗi: " + err.message); }
+  });
+}
+
+if (btnScheduleCancel) {
+  btnScheduleCancel.addEventListener("click", async () => {
+    try {
+      await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+      if (scheduleStatus) scheduleStatus.textContent = "";
+      if (_scheduleCountdown) { clearInterval(_scheduleCountdown); _scheduleCountdown = null; }
+    } catch (err) { alert("Lỗi: " + err.message); }
+  });
+}
+
+socket.on("schedule_event", (data) => {
+  if (_scheduleCountdown) { clearInterval(_scheduleCountdown); _scheduleCountdown = null; }
+  if (!scheduleStatus) return;
+
+  if (data.type === "scheduled_start" || data.type === "scheduled_stop") {
+    let remaining = data.delay;
+    const label = data.type === "scheduled_start" ? "Ghi sau" : "Dừng sau";
+    scheduleStatus.textContent = `⏱ ${label}: ${Math.ceil(remaining / 60)} phút`;
+    _scheduleCountdown = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(_scheduleCountdown);
+        _scheduleCountdown = null;
+        scheduleStatus.textContent = "";
+      } else {
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        scheduleStatus.textContent = `⏱ ${label}: ${m}:${String(s).padStart(2, "0")}`;
+      }
+    }, 1000);
+  } else if (data.type === "auto_stop") {
+    stopRecording();
+    scheduleStatus.textContent = "✅ Dừng tự động theo lịch.";
+    setTimeout(() => { if (scheduleStatus) scheduleStatus.textContent = ""; }, 3000);
+  } else if (data.type === "started") {
+    scheduleStatus.textContent = "✅ Đã bắt đầu ghi theo lịch.";
+    setTimeout(() => { if (scheduleStatus) scheduleStatus.textContent = ""; }, 3000);
+  } else if (data.type === "cancelled") {
+    scheduleStatus.textContent = "";
+  }
+});

@@ -212,11 +212,6 @@
       <div class="header-right flex items-center gap-2.5">
         <span id="status-dot" class="status-dot idle w-2.5 h-2.5 rounded-full bg-[#444] inline-block transition-colors"></span>
         <span id="status-label" class="status-label text-[11px] tracking-[0.15em] text-dim font-bold uppercase">SẴN SÀNG</span>
-        <label class="toggle-switch" title="Tự động phát hiện và hỏi ghi cuộc gọi" style="display:none;">
-          <input type="checkbox" id="auto-detect-toggle" {% if config.auto_detect_calls %}checked{% endif %} />
-          <span class="slider"></span>
-        </label>
-        <span class="toggle-label text-[11px] text-dim" style="display:none;">Tự động</span>
       </div>
     </div>
   </header>
@@ -357,6 +352,63 @@
     <!-- ══ TAB 1: CÀI ĐẶT ══════════════════════════════════════════ -->
     <div id="tab-panel-1" class="tab-panel"
          style="flex-direction:column; padding:16px; overflow-y:auto; max-width:900px; width:100%; margin:0 auto;">
+
+      <!-- P2: Auto-detect toggle (moved from hidden header) -->
+      <section aria-label="Tự động phát hiện cuộc gọi" style="margin-bottom:20px;">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-3 border-b border-border pb-1.5">
+          🔍 TỰ ĐỘNG PHÁT HIỆN CUỘC GỌI
+        </h2>
+        <div class="flex items-center gap-3">
+          <label class="toggle-switch" title="Tự động phát hiện Zoom / Teams / Meet và hỏi ghi">
+            <input type="checkbox" id="auto-detect-toggle" {% if config.auto_detect_calls %}checked{% endif %} />
+            <span class="slider"></span>
+          </label>
+          <span class="text-[12px] text-dim">Giám sát cuộc gọi Zoom, Teams, Meet</span>
+          <span class="tooltip" data-tip="Khi bật, app sẽ phát hiện cuộc gọi qua 3 phương pháp (Process, Audio WASAPI, WinRT) và hỏi bạn có muốn ghi không.">?</span>
+        </div>
+        <p class="text-[11px] text-dim mt-2 italic">Phím tắt: <strong class="text-accent">Ctrl+Alt+R</strong> — Bắt đầu/Dừng ghi (global hotkey qua system tray)</p>
+        <p class="text-[11px] text-dim mt-1 italic">Phím tắt: <strong class="text-accent">Ctrl+Shift+R</strong> — Bắt đầu/Dừng ghi (trong browser)</p>
+      </section>
+
+      <!-- P3: Audio device selection -->
+      <section aria-label="Chọn thiết bị âm thanh" style="margin-bottom:20px;">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-3 border-b border-border pb-1.5">
+          🎤 THIẾT BỊ ÂM THANH
+        </h2>
+        <div class="flex items-center gap-3 flex-wrap">
+          <label class="text-xs text-dim shrink-0 min-w-[120px]">Microphone:</label>
+          <select id="mic-device-select"
+            class="flex-1 min-w-[200px] max-w-[400px] bg-bg2 text-accent border border-border rounded px-2.5 py-1.5 font-mono text-xs cursor-pointer transition-colors hover:border-[#444] outline-none">
+            <option value="">— Mặc định —</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- P3: Schedule recording -->
+      <section aria-label="Hẹn giờ ghi" style="margin-bottom:20px;">
+        <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-3 border-b border-border pb-1.5">
+          ⏰ HẸN GIỜ GHI
+        </h2>
+        <div class="flex items-center gap-3 flex-wrap">
+          <label class="text-xs text-dim shrink-0">Sau</label>
+          <input type="number" id="schedule-delay" min="1" max="1440" value="5"
+            class="w-[70px] bg-bg2 text-accent border border-border rounded px-2 py-1.5 font-mono text-xs text-right outline-none" />
+          <span class="text-xs text-dim">phút</span>
+          <button id="btn-schedule-start"
+            class="font-mono text-[11px] px-3 py-1.5 rounded border border-green bg-green/[0.08] text-green cursor-pointer transition-all hover:bg-green/[0.18]">
+            ▶ Hẹn ghi
+          </button>
+          <button id="btn-schedule-stop"
+            class="font-mono text-[11px] px-3 py-1.5 rounded border border-red bg-red/[0.08] text-red cursor-pointer transition-all hover:bg-red/[0.18]">
+            ■ Hẹn dừng
+          </button>
+          <button id="btn-schedule-cancel"
+            class="font-mono text-[11px] px-3 py-1.5 rounded border border-border bg-transparent text-dim cursor-pointer transition-all hover:border-[#444] hover:text-accent">
+            ✕ Hủy
+          </button>
+        </div>
+        <span id="schedule-status" class="block text-[11px] text-yellow mt-2 font-mono"></span>
+      </section>
 
       <!-- Manual Merge -->
       <section id="manual-merge" aria-label="Ghép file thủ công" style="margin-bottom:20px;">

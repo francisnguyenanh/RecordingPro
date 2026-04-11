@@ -37,13 +37,22 @@ SEGMENT_DURATION_SECONDS = 300
 class RecordingSession:
     """Quản lý một phiên ghi — audio trước, video sau, đồng bộ offset."""
 
-    def __init__(self, display_index: int = 1, output_dir: Path = None):
+    def __init__(self, display_index: int = 1, output_dir: Path = None,
+                 detected_app: str = None, mic_device: int = None):
         self._output_dir: Path = output_dir or OUTPUT_DIR
-        self.session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.audio = AudioEngine(self.session_id, output_dir=self._output_dir)
+        # P3: Auto-naming — thêm tên app đang gọi vào session_id
+        if detected_app:
+            safe_name = detected_app.replace(" ", "_")
+            self.session_id: str = f"{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        else:
+            self.session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.audio = AudioEngine(self.session_id, output_dir=self._output_dir,
+                                 mic_device=mic_device)
         self.video = VideoEngine(self.session_id, display_index=display_index, output_dir=self._output_dir)
         self.sync_offset_ms: float = 0.0
         self.is_recording: bool = False
+        self.mic_gain: float = 1.0
+        self.speaker_gain: float = 1.0
         
         self.chunk_idx = 0
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ChunkProc")
@@ -102,7 +111,8 @@ class RecordingSession:
             self.sync_offset_ms = (self.video.start_timestamp - self.audio.start_timestamp) * 1000
 
         f = self.executor.submit(
-            _process_chunk, self.session_id, self.chunk_idx, vi, ai, chunk_offset_ms, self._output_dir
+            _process_chunk, self.session_id, self.chunk_idx, vi, ai, chunk_offset_ms,
+            self._output_dir, self.mic_gain, self.speaker_gain
         )
         self.futures.append(f)
         self.chunk_idx += 1
@@ -120,6 +130,8 @@ class RecordingSession:
              current_step_ref: dict = None) -> dict:
         """Dừng ghi âm/video và join các worker trả về kết quả cuối."""
         self.is_recording = False
+        self.mic_gain = mic_gain
+        self.speaker_gain = speaker_gain
         self._stop_event.set()
         if self._timer_thread:
             self._timer_thread.join(timeout=3)
@@ -133,7 +145,8 @@ class RecordingSession:
         # Queue chunk cuối
         if vi and ai:
             f = self.executor.submit(
-                _process_chunk, self.session_id, self.chunk_idx, vi, ai, self.sync_offset_ms, self._output_dir
+                _process_chunk, self.session_id, self.chunk_idx, vi, ai, self.sync_offset_ms,
+                self._output_dir, mic_gain, speaker_gain
             )
             self.futures.append(f)
 
@@ -203,9 +216,40 @@ def _get_wav_duration(wav_path: str) -> float:
     return 0.0
 
 
-def _process_chunk(session_id: str, chunk_idx: int, vi: dict, ai: dict, offset_ms: float, output_dir: Path) -> str | None:
+# ── P2: GPU encoder detection ─────────────────────────────────────────
+_cached_encoder: list | None = None
+
+def _detect_video_encoder(ffmpeg: str) -> list:
+    """Thử GPU encoder (NVENC/AMF/QSV), fallback libx264."""
+    global _cached_encoder
+    if _cached_encoder is not None:
+        return list(_cached_encoder)
+    for encoder, preset_args in [
+        ("h264_nvenc", ["-preset", "p4", "-cq", "23"]),
+        ("h264_amf", ["-quality", "balanced"]),
+        ("h264_qsv", ["-preset", "faster", "-global_quality", "23"]),
+    ]:
+        try:
+            test_cmd = [ffmpeg, "-hide_banner", "-f", "lavfi", "-i",
+                        "nullsrc=s=64x64:d=0.1:r=1", "-frames:v", "1",
+                        "-c:v", encoder, "-f", "null", "-"]
+            test = subprocess.run(test_cmd, capture_output=True, timeout=5, **_POPEN_FLAGS)
+            if test.returncode == 0:
+                _cached_encoder = ["-c:v", encoder] + preset_args
+                logger.info("[Encoder] GPU encoder: %s", encoder)
+                return list(_cached_encoder)
+        except Exception:
+            pass
+    _cached_encoder = ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+    logger.info("[Encoder] CPU encoder: libx264")
+    return list(_cached_encoder)
+
+
+def _process_chunk(session_id: str, chunk_idx: int, vi: dict, ai: dict, offset_ms: float,
+                   output_dir: Path, mic_gain: float = 1.0, speaker_gain: float = 1.0) -> str | None:
     """Xử lý đồng bộ ngay lập tức 1 segment (video + audio) bằng ffmpeg -> trả về chunk path."""
     ffmpeg = _find_ffmpeg()
+    enc_args = _detect_video_encoder(ffmpeg)
     video_path = vi.get("video")
     video_frame_count = vi.get("frame_count", 0)
     if not video_path or not Path(video_path).exists():
@@ -243,28 +287,29 @@ def _process_chunk(session_id: str, chunk_idx: int, vi: dict, ai: dict, offset_m
         elif offset_s < 0: cmd += ["-itsoffset", f"{-offset_s:.4f}", "-i", spk_wav]
         else: cmd += ["-i", spk_wav]
 
+    # P0: Sử dụng mic_gain/speaker_gain thực tế
+    mic_vol = round(0.7 * mic_gain, 4)
+    spk_vol = round(1.0 * speaker_gain, 4)
+
     if has_mic and has_spk:
         cmd += [
             "-filter_complex",
-            "[1:a]aresample=async=1000,volume=1.0[m];[2:a]aresample=async=1000,volume=1.0[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
+            f"[1:a]aresample=async=1000,volume={mic_vol}[m];[2:a]aresample=async=1000,volume={spk_vol}[s];[m][s]amix=inputs=2:duration=longest:dropout_transition=0[a]",
             "-map", "0:v", "-map", "[a]",
         ]
     elif has_mic:
-        cmd += ["-filter_complex", "[1:a]aresample=async=1000,volume=1.0[m]", "-map", "0:v", "-map", "[m]"]
+        cmd += ["-filter_complex", f"[1:a]aresample=async=1000,volume={mic_vol}[m]", "-map", "0:v", "-map", "[m]"]
     elif has_spk:
-        cmd += ["-filter_complex", "[1:a]aresample=async=1000,volume=1.0[s]", "-map", "0:v", "-map", "[s]"]
+        cmd += ["-filter_complex", f"[1:a]aresample=async=1000,volume={spk_vol}[s]", "-map", "0:v", "-map", "[s]"]
     else:
         cmd += ["-c:v", "copy"]
 
     if has_mic or has_spk:
-        cmd += [
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30",
+        cmd += enc_args + ["-r", "30",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", chunk_path
         ]
     else:
-        cmd += [
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "30", chunk_path
-        ]
+        cmd += enc_args + ["-r", "30", chunk_path]
 
     proc = subprocess.run(cmd, capture_output=True, **_POPEN_FLAGS)
     if proc.returncode != 0:

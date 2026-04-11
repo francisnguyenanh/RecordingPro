@@ -30,9 +30,10 @@ def _rms_level(data: np.ndarray) -> float:
 class AudioEngine:
     """Ghi mic + loopback speaker, tính mức tín hiệu real-time."""
 
-    def __init__(self, session_id: str, output_dir: Path = None):
+    def __init__(self, session_id: str, output_dir: Path = None, mic_device: int = None):
         self.session_id = session_id
         self._output_dir: Path = output_dir or OUTPUT_DIR
+        self._mic_device = mic_device  # P3: None = default, int = specific device
         self.mic_frames: list[bytes] = []
         self.speaker_frames: list[bytes] = []
         self.mic_level: float = 0.0
@@ -149,12 +150,14 @@ class AudioEngine:
                 self.mic_frames.append(chunk.tobytes())
                 self.mic_level = _rms_level(chunk)
 
+            device_kwarg = {} if self._mic_device is None else {"device": self._mic_device}
             with sd.InputStream(
                 samplerate=SAMPLE_RATE,
                 channels=CHANNELS,
                 dtype="int16",
                 blocksize=BLOCKSIZE,
                 callback=callback,
+                **device_kwarg,
             ):
                 while self.recording:
                     import time
