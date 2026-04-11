@@ -805,13 +805,13 @@ def api_window_preview():
     req_w = int(data.get("width",  0))
     req_h = int(data.get("height", 0))
 
+    logger.info("[WindowPreview] Request: hwnd=%s title=%r req_w=%d req_h=%d", hwnd, title, req_w, req_h)
+
     import ctypes, ctypes.wintypes
     user32 = ctypes.windll.user32
-    gdi32  = ctypes.windll.gdi32
 
     # Xác định HWND
     if not hwnd and title:
-        import ctypes
         buf = ctypes.create_unicode_buffer(512)
         WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
         found = []
@@ -822,63 +822,109 @@ def api_window_preview():
             return True
         user32.EnumWindows(WNDENUMPROC(_cb), 0)
         hwnd = found[0] if found else None
+        logger.info("[WindowPreview] HWND lookup by title=%r → found=%s", title, hwnd)
 
     if not hwnd:
+        logger.warning("[WindowPreview] Không tìm thấy HWND cho title=%r", title)
         return jsonify({"ok": False, "error": "Không tìm thấy cửa sổ"}), 404
 
-    if req_w <= 0 or req_h <= 0:
-        rect = ctypes.wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        req_w = max(rect.right  - rect.left, 1)
-        req_h = max(rect.bottom - rect.top,  1)
+    rect = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    logger.info("[WindowPreview] hwnd=%s rect=(%d,%d,%d,%d)",
+                hwnd, rect.left, rect.top, rect.right, rect.bottom)
 
-    # Giới hạn kích thước preview
-    MAX_DIM = 640
-    scale = min(MAX_DIM / req_w, MAX_DIM / req_h, 1.0)
-    pw = max(int(req_w * scale), 2)
-    ph = max(int(req_h * scale), 2)
-    pw = pw if pw % 2 == 0 else pw + 1
-    ph = ph if ph % 2 == 0 else ph + 1
+    # ── Phát hiện cửa sổ đang minimize (rect tại -32000) ─────────────
+    # Root cause: Windows di chuyển cửa sổ minimize đến (-32000,-32000),
+    # nên PrintWindow/mss/BitBlt đều trả về ảnh đen.
+    # Fix: tạm thời restore (không steal focus) → chụp → minimize lại.
+    SW_SHOWNOACTIVATE = 4
+    SW_MINIMIZE = 6
+    is_minimized = bool(user32.IsIconic(hwnd))
+    logger.info("[WindowPreview] is_minimized=%s", is_minimized)
 
     try:
-        # 1. Try PrintWindow capture first
-        from recorder.video_engine import VideoEngine, _BITMAPINFOHEADER
+        if is_minimized:
+            logger.info("[WindowPreview] Restore tạm thời (SW_SHOWNOACTIVATE) để chụp preview")
+            user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+            time.sleep(0.25)  # chờ DWM paint xong
+            # Đọc lại rect sau khi restore — giờ là vị trí thực trên màn hình
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            logger.info("[WindowPreview] Rect sau restore: (%d,%d,%d,%d)",
+                        rect.left, rect.top, rect.right, rect.bottom)
+
+        real_w = max(rect.right  - rect.left, 1)
+        real_h = max(rect.bottom - rect.top,  1)
+
+        if req_w <= 0 or req_h <= 0:
+            req_w, req_h = real_w, real_h
+
+        # Giới hạn kích thước preview
+        MAX_DIM = 640
+        scale = min(MAX_DIM / req_w, MAX_DIM / req_h, 1.0)
+        pw = max(int(req_w * scale), 2)
+        ph = max(int(req_h * scale), 2)
+        pw = pw if pw % 2 == 0 else pw + 1
+        ph = ph if ph % 2 == 0 else ph + 1
+        logger.info("[WindowPreview] preview size=%dx%d (scale=%.3f)", pw, ph, scale)
+
+        from recorder.video_engine import VideoEngine
         import cv2, base64, numpy as np
-        frame_full = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
 
-        # 2. Check if result is black (GPU/hardware-accelerated apps like Teams, Edge)
-        is_black = frame_full is None or (
-            frame_full is not None and frame_full.mean() < 2.0
-        )
+        frame_full = None
 
-        if is_black:
-            # Fallback: mss screen grab of the window bounding rect
+        # ── Bước 1: mss screen grab (đáng tin cậy nhất khi cửa sổ visible) ──
+        try:
+            import mss as _mss
+            mon = {"left": rect.left, "top": rect.top, "width": real_w, "height": real_h}
+            logger.info("[WindowPreview] mss grab: %s", mon)
+            with _mss.mss() as sct:
+                shot = sct.grab(mon)
+            arr = np.array(shot, dtype=np.uint8)
+            frame_mss = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+            mss_mean = float(frame_mss.mean())
+            logger.info("[WindowPreview] mss mean=%.2f shape=%s", mss_mean, frame_mss.shape)
+            if mss_mean > 5.0:
+                frame_full = frame_mss
+            else:
+                logger.warning("[WindowPreview] mss trả về ảnh đen (mean=%.2f)", mss_mean)
+        except Exception as mss_exc:
+            logger.warning("[WindowPreview] mss exception: %s", mss_exc)
+
+        # ── Bước 2: PrintWindow fallback ──────────────────────────────
+        if frame_full is None:
+            logger.info("[WindowPreview] Bước 2: PrintWindow hwnd=%s size=%dx%d", hwnd, req_w, req_h)
             try:
-                import mss as _mss
-                rect = ctypes.wintypes.RECT()
-                user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                mon = {
-                    "left":   rect.left,
-                    "top":    rect.top,
-                    "width":  max(rect.right  - rect.left, 1),
-                    "height": max(rect.bottom - rect.top,  1),
-                }
-                with _mss.mss() as sct:
-                    shot = sct.grab(mon)
-                arr = np.array(shot, dtype=np.uint8)
-                frame_full = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-            except Exception as mss_exc:
-                logger.warning("[WindowPreview] mss fallback lỗi: %s", mss_exc)
-                if frame_full is None:
-                    return jsonify({"ok": False, "error": "Không capture được cửa sổ"}), 500
+                frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
+                if frame_pw is not None:
+                    pw_mean = float(frame_pw.mean())
+                    logger.info("[WindowPreview] PrintWindow mean=%.2f", pw_mean)
+                    if pw_mean > 5.0:
+                        frame_full = frame_pw
+                    else:
+                        logger.warning("[WindowPreview] PrintWindow cũng đen (mean=%.2f)", pw_mean)
+                else:
+                    logger.warning("[WindowPreview] PrintWindow trả về None")
+            except Exception as pw_exc:
+                logger.warning("[WindowPreview] PrintWindow exception: %s", pw_exc)
+
+        if frame_full is None:
+            logger.error("[WindowPreview] Tất cả phương pháp thất bại cho hwnd=%s title=%r", hwnd, title)
+            return jsonify({"ok": False, "error": "Không capture được nội dung cửa sổ"}), 500
 
         frame_small = cv2.resize(frame_full, (pw, ph))
         _, buf_enc = cv2.imencode(".jpg", frame_small, [cv2.IMWRITE_JPEG_QUALITY, 80])
         b64 = base64.b64encode(buf_enc.tobytes()).decode()
+        logger.info("[WindowPreview] Thành công: jpeg %d bytes", len(buf_enc))
         return jsonify({"ok": True, "preview_b64": b64, "width": pw, "height": ph})
+
     except Exception as exc:
-        logger.warning("[WindowPreview] %s", exc)
+        logger.error("[WindowPreview] Lỗi không xử lý được: %s", exc, exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
+    finally:
+        # Luôn minimize lại nếu đã restore tạm thời
+        if is_minimized:
+            logger.info("[WindowPreview] Re-minimize hwnd=%s", hwnd)
+            user32.ShowWindow(hwnd, SW_MINIMIZE)
 
 
 # ══════════════════════════════════════════════════════════════════════
