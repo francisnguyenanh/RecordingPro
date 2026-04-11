@@ -8,3 +8,9 @@ bin/ffmpeg
 *.pyc
 recorder/__pycache__/
 recorder/__pycache__/
+recorder/__pycache__/__init__.cpython-313.pyc
+recorder/__pycache__/__init__.cpython-313.pyc
+recorder/__pycache__/audio_engine.cpython-313.pyc
+recorder/__pycache__/session.cpython-313.pyc
+recorder/__pycache__/__init__.cpython-313.pyc
+recorder/__pycache__/__init__.cpython-313.pyc
