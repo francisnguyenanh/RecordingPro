@@ -102,9 +102,9 @@
 
     /* Segmented Radio Group */
     .record-mode-group { padding: 2px; background: #111; border: 1px solid #333; border-radius: 4px; display: inline-flex; }
-    .mode-option { cursor: pointer; margin: 0; }
+    .mode-option { cursor: pointer; margin: 0; flex: 1; }
     .mode-option input { display: none; }
-    .mode-option span { display: block; padding: 4px 10px; border-radius: 2px; font-size: 11px; color: #666; transition: all 0.15s; }
+    .mode-option span { display: block; padding: 4px 10px; border-radius: 2px; font-size: 11px; color: #666; transition: all 0.15s; text-align: center; }
     .mode-option input:checked + span { background: #ff3c3c; color: #fff; }
     .mode-option:hover input:not(:checked) + span { color: #888; background: #1a1a1a; }
 
@@ -160,15 +160,12 @@
     .window-card .wc-size  { font-size:9px; color:#555; margin-top:1px; }
     .window-card.active .wc-title { color:#39ff14; }
 
-    /* Display card 1-col */
-    .display-card { border:1px solid #333; border-radius:4px; padding:8px; cursor:pointer; background:#111111; transition:border-color .15s,box-shadow .15s; display:flex; align-items:center; gap:10px; }
+    /* Display card (text-only) */
+    .display-card { border:1px solid #333; border-radius:4px; padding:8px 10px; cursor:pointer; background:#111111; transition:border-color .15s,box-shadow .15s; }
     .display-card:hover { border-color:#555; }
     .display-card.active { border-color:#39ff14; box-shadow:0 0 8px rgba(57,255,20,.2); }
     .display-card.active .display-label { color:#39ff14; }
-    .display-preview-thumb { width:80px; height:45px; object-fit:cover; border-radius:2px; background:#0a0a0a; flex-shrink:0; }
-    .display-info { flex:1; min-width:0; }
     .display-label { font-size:.75rem; color:#aaa; font-family:'Courier Prime','Courier New',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .display-res { font-size:.65rem; color:#555; font-family:'Courier Prime','Courier New',monospace; }
 
     /* Inline status dot mirroring */
     #status-dot-inline.recording  { background:#ff3c3c; animation:pulse 1s ease-in-out infinite; }
@@ -259,63 +256,70 @@
     <div id="tab-panel-0" class="tab-panel active"
          style="flex-direction:row; gap:0; padding:0; max-width:95%; width:100%; margin:0 auto; box-sizing:border-box; overflow:hidden; height:100%;">
 
-      <!-- LEFT: Source Selector (scrollable) -->
-      <div id="source-panel" style="width:340px; min-width:280px; max-width:380px; border-right:1px solid #252525; overflow-y:auto; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; gap:0;">
+      <!-- LEFT: Source Selector (list | preview) -->
+      <div id="source-panel" style="flex:7; border-right:1px solid #252525; overflow:hidden; box-sizing:border-box; display:flex; flex-direction:row;">
 
-        <!-- Source type tabs -->
-        <div style="display:flex; gap:0; margin-bottom:12px; border:1px solid #333; border-radius:4px; overflow:hidden;">
-          <button id="src-tab-display" class="src-tab active"
-            style="flex:1; padding:6px 10px; font-family:inherit; font-size:11px; letter-spacing:.05em; cursor:pointer; border:none; border-right:1px solid #333; transition:background .15s,color .15s; background:#1a1a1a; color:#c8c8c8;">
-            🖥 MÀN HÌNH
-          </button>
-          <button id="src-tab-window" class="src-tab"
-            style="flex:1; padding:6px 10px; font-family:inherit; font-size:11px; letter-spacing:.05em; cursor:pointer; border:none; transition:background .15s,color .15s; background:#111; color:#666;">
-            🪟 CỬA SỔ
-          </button>
-        </div>
+        <!-- Left: List (scrollable) -->
+        <div style="flex:1; min-width:0; overflow-y:auto; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; gap:0; border-right:1px solid #1a1a1a;">
 
-        <!-- DISPLAY panel -->
-        <div id="src-panel-display">
-          <div id="display-grid" style="display:flex; flex-direction:column; gap:8px; margin-bottom:8px;">
-            <div class="display-card-loading text-dim italic text-xs py-3">Đang tải…</div>
-          </div>
-          <button id="refresh-previews"
-            class="btn-secondary font-mono text-[10px] px-2.5 py-1 rounded border border-border bg-transparent text-dim cursor-pointer transition-all hover:border-[#444] hover:text-accent hover:bg-bg3">
-            ↺ Làm mới xem trước
-          </button>
-        </div>
-
-        <!-- WINDOW panel (hidden by default) -->
-        <div id="src-panel-window" class="hidden">
-          <div class="flex items-center gap-2 mb-2">
-            <input id="window-search" type="text" placeholder="🔍 Tìm cửa sổ..."
-              style="flex:1; background:#111; border:1px solid #333; border-radius:3px; padding:5px 8px; font-family:inherit; font-size:11px; color:#c8c8c8; outline:none;" />
-            <button id="refresh-windows"
-              class="font-mono text-[10px] px-2.5 py-1.5 rounded border border-border bg-transparent text-dim cursor-pointer hover:border-[#444] hover:text-accent shrink-0">
-              ↺
+          <!-- Source type tabs -->
+          <div style="display:flex; gap:0; margin-bottom:12px; border:1px solid #333; border-radius:4px; overflow:hidden; flex-shrink:0;">
+            <button id="src-tab-display" class="src-tab active"
+              style="flex:1; padding:6px 10px; font-family:inherit; font-size:11px; letter-spacing:.05em; cursor:pointer; border:none; border-right:1px solid #333; transition:background .15s,color .15s; background:#1a1a1a; color:#c8c8c8;">
+              🖥 MÀN HÌNH
+            </button>
+            <button id="src-tab-window" class="src-tab"
+              style="flex:1; padding:6px 10px; font-family:inherit; font-size:11px; letter-spacing:.05em; cursor:pointer; border:none; transition:background .15s,color .15s; background:#111; color:#666;">
+              🪟 CỬA SỔ
             </button>
           </div>
-          <!-- 2-column window grid -->
-          <div id="window-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
-            <div style="color:#666; font-size:11px; font-style:italic; grid-column:span 2; padding:8px 0;">Đang tải…</div>
-          </div>
-          <!-- Preview -->
-          <div id="window-preview-container" class="hidden" style="margin-top:8px;">
-            <div style="font-size:10px; color:#555; margin-bottom:4px; letter-spacing:.08em; text-transform:uppercase;">Preview</div>
-            <div style="border:1px solid #333; border-radius:3px; overflow:hidden; background:#0a0a0a;">
-              <img id="window-preview-img" style="width:100%; height:auto; display:block;" alt="preview" />
+
+          <!-- DISPLAY list -->
+          <div id="src-panel-display">
+            <div id="display-grid" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;">
+              <div class="display-card-loading text-dim italic text-xs py-3">Đang tải…</div>
             </div>
-            <div id="window-preview-label" style="font-size:10px; color:#666; margin-top:3px; font-family:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+            <button id="refresh-previews"
+              class="btn-secondary font-mono text-[10px] px-2.5 py-1 rounded border border-border bg-transparent text-dim cursor-pointer transition-all hover:border-[#444] hover:text-accent hover:bg-bg3">
+              ↺ Làm mới
+            </button>
           </div>
-          <!-- Hidden fields kept for JS compat -->
-          <select id="window-select" style="display:none;"></select>
-          <span id="window-capture-label" style="display:none;"></span>
-        </div>
+
+          <!-- WINDOW list (hidden by default) -->
+          <div id="src-panel-window" class="hidden">
+            <div class="flex items-center gap-2 mb-2">
+              <input id="window-search" type="text" placeholder="🔍 Tìm cửa sổ..."
+                style="flex:1; background:#111; border:1px solid #333; border-radius:3px; padding:5px 8px; font-family:inherit; font-size:11px; color:#c8c8c8; outline:none;" />
+              <button id="refresh-windows"
+                class="font-mono text-[10px] px-2.5 py-1.5 rounded border border-border bg-transparent text-dim cursor-pointer hover:border-[#444] hover:text-accent shrink-0">
+                ↺
+              </button>
+            </div>
+            <!-- 2-column window grid -->
+            <div id="window-grid" style="display:grid; grid-template-columns:1fr; gap:6px;">
+              <div style="color:#666; font-size:11px; font-style:italic; grid-column:span 1; padding:8px 0;">Đang tải…</div>
+            </div>
+            <!-- Hidden fields for JS compat -->
+            <select id="window-select" style="display:none;"></select>
+            <span id="window-capture-label" style="display:none;"></span>
+          </div>
+
+        </div><!-- /left list -->
+
+        <!-- Right: Shared preview (no scroll) -->
+        <div id="source-preview-panel" style="flex:1; min-width:0; padding:12px; box-sizing:border-box; display:flex; flex-direction:column; gap:6px; overflow:hidden;">
+          <div style="font-size:10px; color:#555; letter-spacing:.08em; text-transform:uppercase; flex-shrink:0;">Preview</div>
+          <div style="flex:1; min-height:0; border:1px solid #333; border-radius:3px; overflow:hidden; background:#0a0a0a; display:flex; align-items:center; justify-content:center;">
+            <img id="source-preview-img" style="width:100%; object-fit:contain; display:none;" alt="preview" />
+            <div id="source-preview-placeholder" style="color:#444; font-size:11px; font-style:italic; text-align:center; padding:8px;">Chọn nguồn để xem trước</div>
+          </div>
+          <div id="source-preview-label" style="font-size:10px; color:#666; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0;"></div>
+        </div><!-- /right preview -->
 
       </div><!-- /source-panel -->
 
       <!-- RIGHT: Controls + Meters + Options (scrollable) -->
-      <div style="flex:1; overflow-y:auto; padding:14px 16px; box-sizing:border-box; display:flex; flex-direction:column; gap:0;">
+      <div style="flex:3; overflow-y:auto; padding:14px 16px; box-sizing:border-box; display:flex; flex-direction:column; gap:0;">
 
         <!-- RECORD CONTROL -->
         <section id="controls" aria-label="Điều khiển ghi" style="display:flex; align-items:center; gap:16px; margin-bottom:14px;">
@@ -363,7 +367,7 @@
         <section style="margin-bottom:12px;">
           <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">⚙ TÙY CHỌN NHANH</h2>
           <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-          <div class="record-mode-group flex gap-2">
+          <div class="record-mode-group flex gap-2" style="flex-basis:100%;">
             <label class="mode-option">
               <input type="radio" name="record-mode" value="mp3_only" {% if config.record_mode_default == 'mp3_only' %}checked{% endif %} />
               <span>Chỉ MP3</span>
@@ -377,7 +381,6 @@
               <span>Chỉ MP4</span>
             </label>
           </div>
-          <span style="color:#333; font-size:14px;">|</span>
           <label class="flex items-center gap-1.5 text-[12px] text-dim">
             🎤
             <select id="opt-mic-gain" class="test-select bg-[#111] text-[#aaa] border border-[#333] rounded-sm px-1.5 py-1 font-mono text-[11px] cursor-pointer">

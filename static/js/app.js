@@ -394,8 +394,13 @@ function switchSourceTab(mode) {
   if (srcTabWindow)  srcTabWindow.classList.toggle("active",  isWin);
   if (srcPanelDisplay) srcPanelDisplay.classList.toggle("hidden", isWin);
   if (srcPanelWindow)  srcPanelWindow.classList.toggle("hidden", !isWin);
-  if (isWin) loadWindows();
-  else clearWindowPreview();
+  if (isWin) {
+    loadWindows();
+    updateSourcePreview("", "");
+  } else {
+    const selCard = displayGrid.querySelector(`[data-index="${state.selectedDisplay}"]`);
+    updateSourcePreview(selCard ? (selCard.dataset.b64 || "") : "", state.selectedDisplayName);
+  }
 }
 
 if (srcTabDisplay) srcTabDisplay.addEventListener("click", () => switchSourceTab("display"));
@@ -412,6 +417,20 @@ async function loadDisplays() {
   }
 }
 
+function updateSourcePreview(b64, label) {
+  const img = document.getElementById("source-preview-img");
+  const ph  = document.getElementById("source-preview-placeholder");
+  const lbl = document.getElementById("source-preview-label");
+  if (b64) {
+    if (img) { img.src = `data:image/jpeg;base64,${b64}`; img.style.display = "block"; }
+    if (ph)  ph.style.display = "none";
+  } else {
+    if (img) { img.src = ""; img.style.display = "none"; }
+    if (ph)  { ph.style.display = "block"; ph.textContent = "Chọn nguồn để xem trước"; }
+  }
+  if (lbl) lbl.textContent = label || "";
+}
+
 function renderDisplayCards(displays) {
   displayGrid.innerHTML = "";
   if (!displays || displays.length === 0) {
@@ -422,20 +441,13 @@ function renderDisplayCards(displays) {
     const card = document.createElement("div");
     card.className = "display-card" + (d.index === state.selectedDisplay ? " active" : "");
     card.dataset.index = d.index;
-
-    const imgSrc = d.preview_b64
-      ? `data:image/jpeg;base64,${d.preview_b64}`
-      : "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-
-    card.innerHTML = `
-      <img class="display-preview-thumb" src="${imgSrc}" alt="${escHtml(d.name)}" loading="lazy" />
-      <div class="display-info">
-        <div class="display-label">${escHtml(d.name)}${d.is_primary ? ' <span style="font-size:9px;color:#555;">[Primary]</span>' : ''}</div>
-        <div class="display-res">${d.width}&thinsp;×&thinsp;${d.height}</div>
-      </div>
-    `;
+    card.dataset.b64   = d.preview_b64 || "";
+    card.innerHTML = `<div class="display-label">${escHtml(d.name)}${d.is_primary ? ' <span style="font-size:9px;color:#555;">[P]</span>' : ''}</div>`;
     card.addEventListener("click", () => setSelectedDisplay(d.index, d.name));
     displayGrid.appendChild(card);
+    if (d.index === state.selectedDisplay && d.preview_b64) {
+      updateSourcePreview(d.preview_b64, d.name);
+    }
   }
 }
 
@@ -445,6 +457,8 @@ function setSelectedDisplay(index, name) {
   document.querySelectorAll(".display-card").forEach(c => {
     c.classList.toggle("active", parseInt(c.dataset.index) === index);
   });
+  const _dc = displayGrid.querySelector(`[data-index="${index}"]`);
+  if (_dc) updateSourcePreview(_dc.dataset.b64 || "", name);
 
   if (state.appState === "recording") {
     fetch("/api/switch-display", {
@@ -472,8 +486,10 @@ async function refreshPreviews() {
     for (const p of previews) {
       const card = displayGrid.querySelector(`[data-index="${p.index}"]`);
       if (card && p.preview_b64) {
-        const img = card.querySelector(".display-preview-thumb");
-        if (img) img.src = `data:image/jpeg;base64,${p.preview_b64}`;
+        card.dataset.b64 = p.preview_b64;
+        if (parseInt(p.index) === state.selectedDisplay) {
+          updateSourcePreview(p.preview_b64, state.selectedDisplayName);
+        }
       }
     }
   } catch (err) {
@@ -872,10 +888,7 @@ function renderWindowGrid(windows) {
     card.className = "window-card" + (state.selectedWindow && state.selectedWindow.hwnd === w.hwnd ? " active" : "");
     card.dataset.title = (w.title || "").toLowerCase();
     card.dataset.hwnd  = w.hwnd || "";
-    card.innerHTML = `
-      <div class="wc-title" title="${escHtml(w.title)}">${escHtml(w.title)}</div>
-      <div class="wc-size">${w.width}×${w.height}</div>
-    `;
+    card.innerHTML = `<div class="wc-title" title="${escHtml(w.title)}">${escHtml(w.title)}</div>`;
     card.addEventListener("click", () => setSelectedWindow(w));
     grid.appendChild(card);
   }
@@ -919,14 +932,13 @@ const btnRefreshWindows = document.getElementById("refresh-windows");
 if (btnRefreshWindows) btnRefreshWindows.addEventListener("click", loadWindows);
 
 async function loadWindowPreview(win) {
-  const container = document.getElementById("window-preview-container");
-  const img = document.getElementById("window-preview-img");
-  const lbl = document.getElementById("window-preview-label");
-  if (!container || !img) return;
-  container.classList.remove("hidden");
-  img.src = "";
-  img.style.display = "none";
-  if (lbl) lbl.textContent = "⏳ Đang tải preview...";
+  const img = document.getElementById("source-preview-img");
+  const ph  = document.getElementById("source-preview-placeholder");
+  const lbl = document.getElementById("source-preview-label");
+  if (!img) return;
+  if (img) { img.src = ""; img.style.display = "none"; }
+  if (ph)  { ph.style.display = "block"; ph.textContent = "⏳ Đang tải preview..."; }
+  if (lbl) lbl.textContent = win.title;
   try {
     const res = await fetch("/api/windows/preview", {
       method: "POST",
@@ -940,24 +952,18 @@ async function loadWindowPreview(win) {
     });
     const data = await res.json();
     if (data.ok && data.preview_b64) {
-      img.src = `data:image/jpeg;base64,${data.preview_b64}`;
-      img.style.display = "block";
-      if (lbl) lbl.textContent = win.title;
+      if (img) { img.src = `data:image/jpeg;base64,${data.preview_b64}`; img.style.display = "block"; }
+      if (ph)  ph.style.display = "none";
     } else {
-      if (lbl) lbl.textContent = `⚠️ ${data.error || "Không lấy được preview"}`;
+      if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ ${data.error || "Không lấy được preview"}`; }
     }
   } catch (err) {
-    if (lbl) lbl.textContent = `⚠️ Lỗi: ${err.message}`;
+    if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ Lỗi: ${err.message}`; }
   }
 }
 
 function clearWindowPreview() {
-  const container = document.getElementById("window-preview-container");
-  const img = document.getElementById("window-preview-img");
-  const lbl = document.getElementById("window-preview-label");
-  if (container) container.classList.add("hidden");
-  if (img) { img.src = ""; img.style.display = "none"; }
-  if (lbl) lbl.textContent = "";
+  updateSourcePreview("", "");
 }
 
 
