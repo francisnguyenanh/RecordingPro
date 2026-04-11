@@ -241,6 +241,28 @@
           <h2 class="section-title text-[11px] font-bold tracking-[0.2em] text-dim uppercase mb-2 border-b border-border pb-1">
             🖥 CHỌN MÀN HÌNH
           </h2>
+          <!-- Window mode toggle -->
+          <div class="flex items-center gap-2 mb-2">
+            <label class="toggle-switch" title="Bật để ghi theo cửa sổ thay vì toàn màn hình">
+              <input type="checkbox" id="window-mode-toggle" />
+              <span class="slider"></span>
+            </label>
+            <span class="text-[11px] text-dim">Ghi theo cửa sổ</span>
+          </div>
+          <!-- Window capture section (hidden by default) -->
+          <div id="window-capture-section" class="hidden mb-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <select id="window-select"
+                class="flex-1 min-w-[180px] bg-bg2 text-accent border border-border rounded px-2 py-1.5 font-mono text-xs cursor-pointer hover:border-[#444] outline-none">
+                <option value="">— Chọn cửa sổ —</option>
+              </select>
+              <button id="refresh-windows"
+                class="font-mono text-[10px] px-2.5 py-1 rounded border border-border bg-transparent text-dim cursor-pointer hover:border-[#444] hover:text-accent">
+                ↺
+              </button>
+            </div>
+            <span id="window-capture-label" class="block text-[11px] text-green mt-1 font-mono truncate max-w-[280px]"></span>
+          </div>
           <div id="display-grid" class="display-grid flex gap-2.5 flex-wrap mb-2">
             <div class="display-card-loading text-dim italic text-xs py-3">Đang tải…</div>
           </div>

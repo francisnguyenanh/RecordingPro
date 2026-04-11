@@ -294,11 +294,12 @@ class TrayApp:
 
         # 7. Background thread: refresh icon every 5s
         def _icon_updater():
+            import requests as _req
             while True:
                 time.sleep(5)
                 self._refresh_icon()
                 try:
-                    r = requests.get("http://127.0.0.1:5010/api/status", timeout=1)
+                    r = _req.get("http://127.0.0.1:5010/api/status", timeout=1)
                     data = r.json()
                     if data.get("state") == "recording":
                         secs = int(data.get("duration_seconds", 0))

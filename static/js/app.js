@@ -15,6 +15,8 @@ const state = {
   toastTimer: null,
   timerInterval: null,
   seconds: 0,
+  captureMode: "display",     // "display" | "window"
+  selectedWindow: null,       // {title, left, top, width, height}
 };
 
 // ── Elements ─────────────────────────────────────────────────────────
@@ -173,7 +175,11 @@ function applyState(newState, durationSeconds = 0) {
     micBar.classList.add("breathing");
     spkBar.classList.add("breathing");
     recDispLabel.classList.remove("hidden");
-    recDispLabel.textContent = `● Đang ghi: ${state.selectedDisplayName}`;
+    if (state.captureMode === "window" && state.selectedWindow) {
+      recDispLabel.textContent = `● Đang ghi: ${state.selectedWindow.title}`;
+    } else {
+      recDispLabel.textContent = `● Đang ghi: ${state.selectedDisplayName}`;
+    }
   } else if (newState === "processing") {
     recBtn.classList.remove("recording");
     recBtn.classList.add("processing");
@@ -248,6 +254,15 @@ async function startRecording() {
       display_index: state.selectedDisplay,
       ...getRecordMode()
     };
+    // Nếu đang ở chế độ ghi cửa sổ và đã chọn cửa sổ
+    if (state.captureMode === "window" && state.selectedWindow) {
+      body.window_region = {
+        left:   state.selectedWindow.left,
+        top:    state.selectedWindow.top,
+        width:  state.selectedWindow.width,
+        height: state.selectedWindow.height,
+      };
+    }
     const res = await fetch("/api/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -783,6 +798,66 @@ document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
     }).catch(() => {});
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: WINDOW CAPTURE SELECTION
+// ══════════════════════════════════════════════════════════════════════
+async function loadWindows() {
+  const sel = document.getElementById("window-select");
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— Đang tải... —</option>';
+  try {
+    const res = await fetch("/api/windows");
+    const windows = await res.json();
+    sel.innerHTML = '<option value="">— Chọn cửa sổ —</option>';
+    for (const w of windows) {
+      const opt = document.createElement("option");
+      opt.value = JSON.stringify(w);
+      opt.textContent = `${w.title} (${w.width}×${w.height})`;
+      sel.appendChild(opt);
+    }
+    // Restore selection
+    if (state.selectedWindow) {
+      for (const opt of sel.options) {
+        if (opt.value) {
+          const v = JSON.parse(opt.value);
+          if (v.title === state.selectedWindow.title) { sel.value = opt.value; break; }
+        }
+      }
+    }
+  } catch (_) {
+    sel.innerHTML = '<option value="">— Lỗi tải danh sách —</option>';
+  }
+}
+
+const windowModeToggle = document.getElementById("window-mode-toggle");
+const windowCaptureSect = document.getElementById("window-capture-section");
+const displaySelectorSect = document.getElementById("display-selector");
+const windowSelect = document.getElementById("window-select");
+const btnRefreshWindows = document.getElementById("refresh-windows");
+
+if (windowModeToggle) {
+  windowModeToggle.addEventListener("change", (e) => {
+    const isWindow = e.target.checked;
+    state.captureMode = isWindow ? "window" : "display";
+    if (windowCaptureSect) windowCaptureSect.classList.toggle("hidden", !isWindow);
+    if (displaySelectorSect) displaySelectorSect.style.opacity = isWindow ? "0.4" : "1";
+    if (isWindow) loadWindows();
+  });
+}
+
+if (windowSelect) {
+  windowSelect.addEventListener("change", (e) => {
+    const val = e.target.value;
+    state.selectedWindow = val ? JSON.parse(val) : null;
+    const label = document.getElementById("window-capture-label");
+    if (label) label.textContent = state.selectedWindow ? state.selectedWindow.title : "";
+  });
+}
+
+if (btnRefreshWindows) {
+  btnRefreshWindows.addEventListener("click", loadWindows);
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // INIT

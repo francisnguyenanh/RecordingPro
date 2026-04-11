@@ -38,7 +38,8 @@ class RecordingSession:
     """Quản lý một phiên ghi — audio trước, video sau, đồng bộ offset."""
 
     def __init__(self, display_index: int = 1, output_dir: Path = None,
-                 detected_app: str = None, mic_device: int = None):
+                 detected_app: str = None, mic_device: int = None,
+                 window_region: dict = None):
         self._output_dir: Path = output_dir or OUTPUT_DIR
         # P3: Auto-naming — thêm tên app đang gọi vào session_id
         if detected_app:
@@ -48,7 +49,8 @@ class RecordingSession:
             self.session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.audio = AudioEngine(self.session_id, output_dir=self._output_dir,
                                  mic_device=mic_device)
-        self.video = VideoEngine(self.session_id, display_index=display_index, output_dir=self._output_dir)
+        self.video = VideoEngine(self.session_id, display_index=display_index,
+                                 output_dir=self._output_dir, region=window_region)
         self.sync_offset_ms: float = 0.0
         self.is_recording: bool = False
         self.mic_gain: float = 1.0

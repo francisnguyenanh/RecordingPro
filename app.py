@@ -162,9 +162,25 @@ def api_start():
         cfg = load_config()
         mic_device = cfg.get("mic_device_index")
 
+        # Window region capture (optional)
+        window_region = None
+        if data.get("window_region"):
+            wr = data["window_region"]
+            try:
+                window_region = {
+                    "left":   int(wr["left"]),
+                    "top":    int(wr["top"]),
+                    "width":  int(wr["width"]),
+                    "height": int(wr["height"]),
+                }
+                if window_region["width"] <= 0 or window_region["height"] <= 0:
+                    window_region = None
+            except (KeyError, ValueError, TypeError):
+                window_region = None
+
         from recorder.session import RecordingSession
         session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR,
-                                   mic_device=mic_device)
+                                   mic_device=mic_device, window_region=window_region)
         try:
             session.start()
         except Exception as exc:
@@ -724,7 +740,8 @@ def api_schedule():
 # INTERNAL HELPERS
 # ══════════════════════════════════════════════════════════════════════
 
-def _start_session(display_index: int = 1, detected_app: str = None) -> None:
+def _start_session(display_index: int = 1, detected_app: str = None,
+                   window_region: dict = None) -> None:
     global current_session, app_state, _recording_start_time
     with _state_lock:
         if app_state != "idle":
@@ -733,7 +750,8 @@ def _start_session(display_index: int = 1, detected_app: str = None) -> None:
         mic_device = cfg.get("mic_device_index")
         from recorder.session import RecordingSession
         session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR,
-                                   detected_app=detected_app, mic_device=mic_device)
+                                   detected_app=detected_app, mic_device=mic_device,
+                                   window_region=window_region)
         try:
             session.start()
         except Exception as exc:
