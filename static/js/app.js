@@ -954,6 +954,17 @@ async function loadWindowPreview(win) {
     if (data.ok && data.preview_b64) {
       if (img) { img.src = `data:image/jpeg;base64,${data.preview_b64}`; img.style.display = "block"; }
       if (ph) ph.style.display = "none";
+
+      // Cập nhật kích thước thực từ server (sau khi maximize) để record dùng đúng kích thước
+      if (data.width && data.height && state.selectedWindow) {
+        state.selectedWindow.width  = data.width;
+        state.selectedWindow.height = data.height;
+      }
+
+      // Thông báo nếu cửa sổ đã được maximize tự động
+      if (data.was_maximized) {
+        _showWindowMaximizedHint(win.title);
+      }
     } else {
       if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ ${data.error || "Không lấy được preview"}`; }
     }
@@ -961,6 +972,33 @@ async function loadWindowPreview(win) {
     if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ Lỗi: ${err.message}`; }
   }
 }
+
+function _showWindowMaximizedHint(title) {
+  // Hiển thị toast nhỏ thông báo cửa sổ đã được maximize
+  let hint = document.getElementById("win-maximize-hint");
+  if (!hint) {
+    hint = document.createElement("div");
+    hint.id = "win-maximize-hint";
+    hint.style.cssText = [
+      "position:fixed", "bottom:80px", "left:50%", "transform:translateX(-50%)",
+      "background:#1a3a2a", "color:#5dff9e", "border:1px solid #2ecc71",
+      "border-radius:8px", "padding:10px 18px", "font-size:12px",
+      "z-index:9999", "box-shadow:0 4px 16px rgba(0,0,0,.5)",
+      "max-width:340px", "text-align:center", "pointer-events:none",
+    ].join(";");
+    document.body.appendChild(hint);
+  }
+  hint.innerHTML = `🔼 <b>Đã maximize</b> cửa sổ "<span style="color:#fff">${escHtml(title)}</span>"<br><span style="opacity:.8;font-size:11px">Cửa sổ đang mở → có thể ghi bình thường</span>`;
+  hint.style.display = "block";
+  hint.style.opacity = "1";
+  clearTimeout(hint._timer);
+  hint._timer = setTimeout(() => {
+    hint.style.transition = "opacity 0.5s";
+    hint.style.opacity = "0";
+    setTimeout(() => { hint.style.display = "none"; hint.style.transition = ""; }, 500);
+  }, 4000);
+}
+
 
 function clearWindowPreview() {
   updateSourcePreview("", "");

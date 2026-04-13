@@ -833,30 +833,30 @@ def api_window_preview():
     logger.info("[WindowPreview] hwnd=%s rect=(%d,%d,%d,%d)",
                 hwnd, rect.left, rect.top, rect.right, rect.bottom)
 
-    # ── Phát hiện cửa sổ đang minimize (rect tại -32000) ─────────────
-    # Root cause: Windows di chuyển cửa sổ minimize đến (-32000,-32000),
-    # nên PrintWindow/mss/BitBlt đều trả về ảnh đen.
-    # Fix: tạm thời restore (không steal focus) → chụp → minimize lại.
-    SW_SHOWNOACTIVATE = 4
-    SW_MINIMIZE = 6
+    # ── Xử lý cửa sổ đang minimize ───────────────────────────────────
+    # Khi minimize, Windows di chuyển cửa sổ ra (-32000,-32000) và DWM
+    # ngừng composite nó → mọi phương pháp capture đều trả về đen.
+    # Giải pháp: MAXIMIZE cửa sổ (không chỉ restore) để DWM render đầy đủ.
+    # Cửa sổ sẽ được giữ ở trạng thái maximize → record cũng hoạt động tốt.
+    SW_SHOWMAXIMIZED = 3
     is_minimized = bool(user32.IsIconic(hwnd))
     logger.info("[WindowPreview] is_minimized=%s", is_minimized)
 
     try:
         if is_minimized:
-            logger.info("[WindowPreview] Restore tạm thời (SW_SHOWNOACTIVATE) để chụp preview")
-            user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-            time.sleep(0.25)  # chờ DWM paint xong
-            # Đọc lại rect sau khi restore — giờ là vị trí thực trên màn hình
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            logger.info("[WindowPreview] Rect sau restore: (%d,%d,%d,%d)",
-                        rect.left, rect.top, rect.right, rect.bottom)
+            logger.info("[WindowPreview] Maximize cửa sổ (SW_SHOWMAXIMIZED) vì đang minimize")
+            user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
+            time.sleep(0.35)  # chờ DWM paint và window animation xong
+
+        # Đọc rect thực tế sau khi maximize / không thay đổi
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        logger.info("[WindowPreview] Rect: (%d,%d,%d,%d)",
+                    rect.left, rect.top, rect.right, rect.bottom)
 
         real_w = max(rect.right  - rect.left, 1)
         real_h = max(rect.bottom - rect.top,  1)
 
         # Luôn dùng kích thước thực (physical pixels) để capture
-        # req_w/req_h từ client có thể là logical pixels (DPI-scaled), gây crop sai
         cap_w, cap_h = real_w, real_h
 
         # Giới hạn kích thước preview hiển thị
@@ -873,7 +873,7 @@ def api_window_preview():
 
         frame_full = None
 
-        # ── Bước 1: _grab_hwnd_bgr (thử PW_RENDERFULLCONTENT → PrintWindow → BitBlt) ──
+        # ── Bước 1: _grab_hwnd_bgr (PW_RENDERFULLCONTENT → PrintWindow → BitBlt) ──
         logger.info("[WindowPreview] Bước 1: grab_hwnd hwnd=%s cap=%dx%d", hwnd, cap_w, cap_h)
         try:
             frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, cap_w, cap_h)
@@ -915,17 +915,19 @@ def api_window_preview():
         frame_small = cv2.resize(frame_full, (pw, ph))
         _, buf_enc = cv2.imencode(".jpg", frame_small, [cv2.IMWRITE_JPEG_QUALITY, 80])
         b64 = base64.b64encode(buf_enc.tobytes()).decode()
-        logger.info("[WindowPreview] Thành công: jpeg %d bytes", len(buf_enc))
-        return jsonify({"ok": True, "preview_b64": b64, "width": pw, "height": ph})
+        logger.info("[WindowPreview] Thành công: jpeg %d bytes (was_minimized=%s)", len(buf_enc), is_minimized)
+        return jsonify({
+            "ok": True,
+            "preview_b64": b64,
+            "width": real_w,
+            "height": real_h,
+            "was_maximized": is_minimized,   # JS dùng để hiện thông báo
+        })
 
     except Exception as exc:
         logger.error("[WindowPreview] Lỗi không xử lý được: %s", exc, exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
-    finally:
-        # Luôn minimize lại nếu đã restore tạm thời
-        if is_minimized:
-            logger.info("[WindowPreview] Re-minimize hwnd=%s", hwnd)
-            user32.ShowWindow(hwnd, SW_MINIMIZE)
+    # Không re-minimize — cửa sổ ở lại maximize để record hoạt động
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1061,4 +1063,4 @@ if __name__ == "__main__":
     _on_startup()
     logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
     #socketio.run(app, host="127.0.0.1", port=5004)
-    socketio.run(app, host="127.0.0.1", port=5010, debug=True)
+    socketio.run(app, host="127.0.0.1", port=5011, debug=True)

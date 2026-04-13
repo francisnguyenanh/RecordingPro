@@ -13,6 +13,7 @@ import cv2
 # Windows-only: pre-build BITMAPINFOHEADER struct for PrintWindow capture
 if sys.platform == "win32":
     import ctypes as _ct
+    import ctypes.wintypes  # noqa: F401 — needed for RECT in _run_region_loop
 
     class _BITMAPINFOHEADER(_ct.Structure):
         _fields_ = [
@@ -246,6 +247,36 @@ class VideoEngine:
             else:
                 logger.info("[VideoEngine] Không tìm được HWND cho '%s', dùng mss.", title)
 
+        # ── Hàm tiện ích: restore cửa sổ nếu đang minimize ──────────────
+        import ctypes as _ct
+        _user32 = _ct.windll.user32 if sys.platform == "win32" else None
+        SW_SHOWMAXIMIZED = 3   # maximize — DWM render đầy đủ
+
+        def _ensure_not_minimized(h) -> bool:
+            """Nếu cửa sổ đang minimize → maximize. Trả về True nếu đã maximize."""
+            if not h or not _user32:
+                return False
+            if _user32.IsIconic(h):
+                _user32.ShowWindow(h, SW_SHOWMAXIMIZED)
+                time.sleep(0.18)   # đợi DWM paint lại
+                logger.info("[VideoEngine] Cửa sổ minimize → đã maximize (SW_SHOWMAXIMIZED)")
+                return True
+            return False
+
+        # Restore ngay trước khi ghi (nếu cửa sổ đang minimize)
+        if hwnd:
+            _ensure_not_minimized(hwnd)
+            # Đọc lại kích thước thực sau khi restore (physical pixels)
+            if _user32:
+                _rect = _ct.wintypes.RECT()
+                _user32.GetWindowRect(hwnd, _ct.byref(_rect))
+                _real_w = _rect.right  - _rect.left
+                _real_h = _rect.bottom - _rect.top
+                if _real_w > 10 and _real_h > 10:
+                    w = _real_w if _real_w % 2 == 0 else _real_w - 1
+                    h = _real_h if _real_h % 2 == 0 else _real_h - 1
+                    logger.info("[VideoEngine] Kích thước thực sau restore: %dx%d", w, h)
+
         path = self._output_dir / f"{self.session_id}_v{self.current_seg_idx}.mp4"
         writer = _open_writer(path)
         self.start_timestamp = time.perf_counter()
@@ -254,7 +285,8 @@ class VideoEngine:
 
         try:
             if hwnd:
-                # ── PrintWindow capture (hoạt động kể cả khi cửa sổ bị che/inactive) ──
+                # ── PrintWindow capture — kể cả khi cửa sổ bị che/inactive ──
+                _minimize_check_ctr = 0
                 while self.recording and self._pending_region is None:
                     if self._rollover_request.is_set():
                         writer, path = _do_rollover(writer, path)
@@ -264,6 +296,12 @@ class VideoEngine:
 
                     if self._pending_display is not None:
                         break  # display switch requested but no rollover yet — exit cleanly
+
+                    # Kiểm tra minimize mỗi ~2 giây (60 frames) — restore nếu cần
+                    _minimize_check_ctr += 1
+                    if _minimize_check_ctr >= 60:
+                        _minimize_check_ctr = 0
+                        _ensure_not_minimized(hwnd)
 
                     frame = VideoEngine._grab_hwnd_bgr(hwnd, w, h)
                     if frame is None:
