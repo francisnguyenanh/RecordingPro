@@ -366,9 +366,11 @@ class VideoEngine:
 
     @staticmethod
     def _grab_hwnd_bgr(hwnd: int, width: int, height: int):
-        """Capture nội dung cửa sổ qua PrintWindow API.
-        Hoạt động kể cả khi cửa sổ bị che hoặc không active.
-        Trả về numpy array BGR hoặc None nếu thất bại.
+        """Capture nội dung cửa sổ với nhiều phương pháp fallback.
+        1) PrintWindow(PW_RENDERFULLCONTENT) — tốt với Chrome/Electron
+        2) PrintWindow(flag=0)              — tốt với các app Win32 cổ điển
+        3) BitBlt từ màn hình               — luôn hoạt động khi cửa sổ visible
+        Trả về numpy array BGR hoặc None nếu tất cả thất bại.
         """
         import ctypes
         import numpy as np
@@ -376,34 +378,58 @@ class VideoEngine:
         user32 = ctypes.windll.user32
         gdi32  = ctypes.windll.gdi32
 
+        def _read_bitmap(hdc_src, use_print_window: int | None) -> np.ndarray | None:
+            """Tạo DC/bitmap tạm, optionally gọi PrintWindow, rồi đọc pixel."""
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_src)
+            hbmp    = gdi32.CreateCompatibleBitmap(hdc_src, width, height)
+            old_bmp = gdi32.SelectObject(hdc_mem, hbmp)
+            try:
+                if use_print_window is not None:
+                    user32.PrintWindow(hwnd, hdc_mem, use_print_window)
+                else:
+                    # BitBlt từ HDC cửa sổ thực (visible pixels trên màn hình)
+                    gdi32.BitBlt(hdc_mem, 0, 0, width, height, hdc_src, 0, 0, 0x00CC0020)  # SRCCOPY
+
+                bmi = _BITMAPINFOHEADER()
+                bmi.biSize        = ctypes.sizeof(_BITMAPINFOHEADER)
+                bmi.biWidth       = width
+                bmi.biHeight      = -height  # top-down
+                bmi.biPlanes      = 1
+                bmi.biBitCount    = 32
+                bmi.biCompression = 0        # BI_RGB
+
+                buf = (ctypes.c_uint8 * (width * height * 4))()
+                gdi32.GetDIBits(hdc_mem, hbmp, 0, height, buf, ctypes.byref(bmi), 0)
+                arr = np.frombuffer(buf, dtype=np.uint8).reshape((height, width, 4))
+                return arr[:, :, :3].copy()  # BGRA → BGR
+            finally:
+                gdi32.SelectObject(hdc_mem, old_bmp)
+                gdi32.DeleteObject(hbmp)
+                gdi32.DeleteDC(hdc_mem)
+
         hdc_win = user32.GetWindowDC(hwnd)
         if not hdc_win:
             return None
-        hdc_mem = gdi32.CreateCompatibleDC(hdc_win)
-        hbmp    = gdi32.CreateCompatibleBitmap(hdc_win, width, height)
-        gdi32.SelectObject(hdc_mem, hbmp)
+        try:
+            # Phương pháp 1: PW_RENDERFULLCONTENT (Chrome, Electron, UWP)
+            PW_RENDERFULLCONTENT = 0x2
+            frame = _read_bitmap(hdc_win, PW_RENDERFULLCONTENT)
+            if frame is not None and float(frame.mean()) > 5.0:
+                return frame
 
-        # PW_RENDERFULLCONTENT = 0x2 — yêu cầu render đầy đủ (DWM composited)
-        PW_RENDERFULLCONTENT = 0x2
-        user32.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT)
+            # Phương pháp 2: PrintWindow flag=0 (Win32 classic apps)
+            frame = _read_bitmap(hdc_win, 0)
+            if frame is not None and float(frame.mean()) > 5.0:
+                return frame
 
-        bmi = _BITMAPINFOHEADER()
-        bmi.biSize        = ctypes.sizeof(_BITMAPINFOHEADER)
-        bmi.biWidth       = width
-        bmi.biHeight      = -height   # âm = top-down (không bị lật ngược)
-        bmi.biPlanes      = 1
-        bmi.biBitCount    = 32
-        bmi.biCompression = 0         # BI_RGB
+            # Phương pháp 3: BitBlt từ màn hình (luôn hoạt động nếu cửa sổ visible)
+            frame = _read_bitmap(hdc_win, None)
+            if frame is not None and float(frame.mean()) > 2.0:
+                return frame
 
-        buf = (ctypes.c_uint8 * (width * height * 4))()
-        gdi32.GetDIBits(hdc_mem, hbmp, 0, height, buf, ctypes.byref(bmi), 0)
-
-        gdi32.DeleteObject(hbmp)
-        gdi32.DeleteDC(hdc_mem)
-        user32.ReleaseDC(hwnd, hdc_win)
-
-        arr = np.frombuffer(buf, dtype=np.uint8).reshape((height, width, 4))
-        return arr[:, :, :3].copy()  # BGRA → BGR
+            return frame  # trả về dù đen (ít nhất không None)
+        finally:
+            user32.ReleaseDC(hwnd, hdc_win)
 
     # ------------------------------------------------------------------
     def _record_segment_dxcam(

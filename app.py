@@ -855,40 +855,41 @@ def api_window_preview():
         real_w = max(rect.right  - rect.left, 1)
         real_h = max(rect.bottom - rect.top,  1)
 
-        if req_w <= 0 or req_h <= 0:
-            req_w, req_h = real_w, real_h
+        # Luôn dùng kích thước thực (physical pixels) để capture
+        # req_w/req_h từ client có thể là logical pixels (DPI-scaled), gây crop sai
+        cap_w, cap_h = real_w, real_h
 
-        # Giới hạn kích thước preview
+        # Giới hạn kích thước preview hiển thị
         MAX_DIM = 640
-        scale = min(MAX_DIM / req_w, MAX_DIM / req_h, 1.0)
-        pw = max(int(req_w * scale), 2)
-        ph = max(int(req_h * scale), 2)
+        scale = min(MAX_DIM / cap_w, MAX_DIM / cap_h, 1.0)
+        pw = max(int(cap_w * scale), 2)
+        ph = max(int(cap_h * scale), 2)
         pw = pw if pw % 2 == 0 else pw + 1
         ph = ph if ph % 2 == 0 else ph + 1
-        logger.info("[WindowPreview] preview size=%dx%d (scale=%.3f)", pw, ph, scale)
+        logger.info("[WindowPreview] cap=%dx%d → preview=%dx%d (scale=%.3f)", cap_w, cap_h, pw, ph, scale)
 
         from recorder.video_engine import VideoEngine
         import cv2, base64, numpy as np
 
         frame_full = None
 
-        # ── Bước 1: PrintWindow (chụp trực tiếp bộ nhớ của cửa sổ) ──────────────
-        logger.info("[WindowPreview] Bước 1: PrintWindow hwnd=%s size=%dx%d", hwnd, req_w, req_h)
+        # ── Bước 1: _grab_hwnd_bgr (thử PW_RENDERFULLCONTENT → PrintWindow → BitBlt) ──
+        logger.info("[WindowPreview] Bước 1: grab_hwnd hwnd=%s cap=%dx%d", hwnd, cap_w, cap_h)
         try:
-            frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
+            frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, cap_w, cap_h)
             if frame_pw is not None:
                 pw_mean = float(frame_pw.mean())
-                logger.info("[WindowPreview] PrintWindow mean=%.2f", pw_mean)
-                if pw_mean > 5.0:
+                logger.info("[WindowPreview] grab_hwnd mean=%.2f", pw_mean)
+                if pw_mean > 2.0:
                     frame_full = frame_pw
                 else:
-                    logger.warning("[WindowPreview] PrintWindow trả về ảnh đen (mean=%.2f)", pw_mean)
+                    logger.warning("[WindowPreview] grab_hwnd trả về ảnh đen (mean=%.2f)", pw_mean)
             else:
-                logger.warning("[WindowPreview] PrintWindow trả về None")
+                logger.warning("[WindowPreview] grab_hwnd trả về None")
         except Exception as pw_exc:
-            logger.warning("[WindowPreview] PrintWindow exception: %s", pw_exc)
+            logger.warning("[WindowPreview] grab_hwnd exception: %s", pw_exc)
 
-        # ── Bước 2: mss screen grab (fallback nếu PrintWindow thất bại / đen) ──
+        # ── Bước 2: mss screen grab (absolute fallback) ──────────────────────────
         if frame_full is None:
             try:
                 import mss as _mss
@@ -900,7 +901,7 @@ def api_window_preview():
                 frame_mss = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
                 mss_mean = float(frame_mss.mean())
                 logger.info("[WindowPreview] mss mean=%.2f shape=%s", mss_mean, frame_mss.shape)
-                if mss_mean > 5.0:
+                if mss_mean > 2.0:
                     frame_full = frame_mss
                 else:
                     logger.warning("[WindowPreview] mss cũng trả về ảnh đen (mean=%.2f)", mss_mean)
