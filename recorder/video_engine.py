@@ -293,7 +293,6 @@ class VideoEngine:
         try:
             if hwnd:
                 # ── PrintWindow capture — kể cả khi cửa sổ bị che/inactive ──
-                _minimize_check_ctr = 0
                 while self.recording and self._pending_region is None:
                     if self._rollover_request.is_set():
                         writer, path = _do_rollover(writer, path)
@@ -304,11 +303,12 @@ class VideoEngine:
                     if self._pending_display is not None:
                         break  # display switch requested but no rollover yet — exit cleanly
 
-                    # Kiểm tra minimize mỗi ~2 giây (60 frames) — restore nếu cần
-                    _minimize_check_ctr += 1
-                    if _minimize_check_ctr >= 60:
-                        _minimize_check_ctr = 0
+                    # Kiểm tra minimize mỗi frame — IsIconic() rất nhẹ (<1µs)
+                    # Nếu user minimize trong lúc ghi → maximize + giữ cuối Z-order ngay lập tức
+                    if _user32 and _user32.IsIconic(hwnd):
                         _ensure_not_minimized(hwnd)
+                        next_deadline = time.perf_counter()  # reset timing sau khi sleep
+                        continue  # bỏ qua frame này, lấy frame sạch ở vòng tiếp theo
 
                     frame = VideoEngine._grab_hwnd_bgr(hwnd, w, h)
                     if frame is None:
