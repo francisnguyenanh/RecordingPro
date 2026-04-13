@@ -844,8 +844,16 @@ def api_window_preview():
 
     try:
         if is_minimized:
-            logger.info("[WindowPreview] Maximize cửa sổ (SW_SHOWMAXIMIZED) vì đang minimize")
+            logger.info("[WindowPreview] Maximize cửa sổ về cuối Z-order (không cướp focus)")
+            HWND_BOTTOM  = 1
+            SWP_NOMOVE   = 0x0002
+            SWP_NOSIZE   = 0x0001
+            SWP_NOACTIVATE = 0x0010
             user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
+            # Đẩy xuống dưới cùng Z-order ngay sau khi maximize
+            # → cửa sổ mở ra nhưng không che / không cướp focus
+            user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
             time.sleep(0.35)  # chờ DWM paint và window animation xong
 
         # Đọc rect thực tế sau khi maximize / không thay đổi

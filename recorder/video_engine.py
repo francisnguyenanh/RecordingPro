@@ -251,15 +251,22 @@ class VideoEngine:
         import ctypes as _ct
         _user32 = _ct.windll.user32 if sys.platform == "win32" else None
         SW_SHOWMAXIMIZED = 3   # maximize — DWM render đầy đủ
+        HWND_BOTTOM   = 1
+        SWP_NOMOVE    = 0x0002
+        SWP_NOSIZE    = 0x0001
+        SWP_NOACTIVATE = 0x0010
 
         def _ensure_not_minimized(h) -> bool:
-            """Nếu cửa sổ đang minimize → maximize. Trả về True nếu đã maximize."""
+            """Nếu cửa sổ đang minimize → maximize nhưng giữ ở cuối Z-order."""
             if not h or not _user32:
                 return False
             if _user32.IsIconic(h):
                 _user32.ShowWindow(h, SW_SHOWMAXIMIZED)
+                # Đẩy xuống cuối Z-order → không che / không cướp focus
+                _user32.SetWindowPos(h, HWND_BOTTOM, 0, 0, 0, 0,
+                                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
                 time.sleep(0.18)   # đợi DWM paint lại
-                logger.info("[VideoEngine] Cửa sổ minimize → đã maximize (SW_SHOWMAXIMIZED)")
+                logger.info("[VideoEngine] Cửa sổ minimize → maximize (Z-order bottom)")
                 return True
             return False
 
