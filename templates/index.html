@@ -613,7 +613,7 @@
       padding: 6px 8px;
       cursor: pointer;
       background: #111;
-      transition: border-color .12s, background .12s;
+      transition: border-color .12s, background .12s, opacity .15s;
       overflow: hidden;
     }
 
@@ -627,10 +627,14 @@
       background: rgba(57, 255, 20, .06);
     }
 
+    .window-card.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
     .window-card .wc-title {
       font-size: 10px;
       color: #aaa;
-      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       line-height: 1.4;
@@ -809,7 +813,7 @@
 
         <!-- Left: List (scrollable) -->
         <div
-          style="flex:1; min-width:0; overflow-y:auto; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; gap:0; border-right:1px solid #1a1a1a;">
+          style="flex:4; min-width:0; overflow-y:auto; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; gap:0; border-right:1px solid #1a1a1a;">
 
           <!-- Source type tabs -->
           <div
@@ -859,7 +863,7 @@
 
         <!-- Right: Shared preview (no scroll) -->
         <div id="source-preview-panel"
-          style="flex:1; min-width:0; padding:12px; box-sizing:border-box; display:flex; flex-direction:column; gap:6px; overflow:hidden;">
+          style="flex:6; min-width:0; padding:12px; box-sizing:border-box; display:flex; flex-direction:column; gap:6px; overflow:hidden;">
           <div style="font-size:10px; color:#555; letter-spacing:.08em; text-transform:uppercase; flex-shrink:0;">
             Preview</div>
           <div

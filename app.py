@@ -1071,4 +1071,4 @@ if __name__ == "__main__":
     _on_startup()
     logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
     #socketio.run(app, host="127.0.0.1", port=5004)
-    socketio.run(app, host="127.0.0.1", port=5011, debug=False)
+    socketio.run(app, host="127.0.0.1", port=5011, debug=True)

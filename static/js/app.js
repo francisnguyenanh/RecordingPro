@@ -850,15 +850,36 @@ document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
 // ══════════════════════════════════════════════════════════════════════
 // P3: WINDOW CAPTURE SELECTION  (2-col grid in #window-grid)
 // ══════════════════════════════════════════════════════════════════════
-async function loadWindows() {
+// silentRefresh=true: không xoá preview đang hiển thị (dùng cho auto-refresh)
+// ── P4: Throttle ── lưu snapshot hash để bỏ qua nếu danh sách không đổi
+let _lastWindowListHash = "";
+
+function _hashWindowList(windows) {
+  // Hash đơn giản: chuỗi nối hwnd+title của tất cả cửa sổ
+  return windows.map(w => `${w.hwnd}:${w.title}`).join("|");
+}
+
+async function loadWindows(silentRefresh = false) {
   const grid = document.getElementById("window-grid");
   if (!grid) return;
-  grid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;grid-column:1/-1;padding:6px 0;">Đang tải…</div>';
-  clearWindowPreview();
+  if (!silentRefresh) {
+    grid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;grid-column:1/-1;padding:6px 0;">Đang tải…</div>';
+    clearWindowPreview();
+  }
   try {
     const res = await fetch("/api/windows");
     const windows = await res.json();
-    renderWindowGrid(windows);
+
+    // ── P4: Throttle ── bỏ qua render nếu danh sách không thay đổi
+    if (silentRefresh) {
+      const newHash = _hashWindowList(windows);
+      if (newHash === _lastWindowListHash) return;  // không có gì thay đổi, bỏ qua
+      _lastWindowListHash = newHash;
+    } else {
+      _lastWindowListHash = _hashWindowList(windows);
+    }
+
+    renderWindowGrid(windows, silentRefresh);
     // Hidden select for backward compat (startRecording reads state.selectedWindow directly)
     const sel = document.getElementById("window-select");
     if (sel) {
@@ -871,27 +892,82 @@ async function loadWindows() {
       }
     }
   } catch (_) {
-    if (grid) grid.innerHTML = '<div style="color:#e55;font-size:11px;grid-column:1/-1;">Lỗi tải danh sách cửa sổ.</div>';
+    if (!silentRefresh && grid) grid.innerHTML = '<div style="color:#e55;font-size:11px;grid-column:1/-1;">Lỗi tải danh sách cửa sổ.</div>';
   }
 }
 
-function renderWindowGrid(windows) {
+// silentRefresh=true: giữ active/preview của cửa sổ đang chọn, dùng diff-based update
+function renderWindowGrid(windows, silentRefresh = false) {
   const grid = document.getElementById("window-grid");
   if (!grid) return;
-  grid.innerHTML = "";
+
   if (!windows || windows.length === 0) {
     grid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;grid-column:1/-1;">Không tìm thấy cửa sổ.</div>';
     return;
   }
-  for (const w of windows) {
-    const card = document.createElement("div");
-    card.className = "window-card" + (state.selectedWindow && state.selectedWindow.hwnd === w.hwnd ? " active" : "");
-    card.dataset.title = (w.title || "").toLowerCase();
-    card.dataset.hwnd = w.hwnd || "";
-    card.innerHTML = `<div class="wc-title" title="${escHtml(w.title)}">${escHtml(w.title)}</div>`;
-    card.addEventListener("click", () => setSelectedWindow(w));
-    grid.appendChild(card);
+
+  if (!silentRefresh) {
+    // Manual refresh: render lại hoàn toàn (không cần tránh chớp nháy)
+    grid.innerHTML = "";
+    for (const w of windows) {
+      const card = _makeWindowCard(w);
+      grid.appendChild(card);
+    }
+    return;
   }
+
+  // ── P1: Diff-based update (silentRefresh) ──────────────────────────
+  const newHwnds = new Set(windows.map(w => String(w.hwnd || "")));
+  const newWindowMap = new Map(windows.map(w => [String(w.hwnd || ""), w]));
+
+  // 1. Xoá card của cửa sổ không còn tồn tại (fade-out trước khi remove)
+  Array.from(grid.querySelectorAll(".window-card")).forEach(card => {
+    if (!newHwnds.has(card.dataset.hwnd)) {
+      card.classList.add("fade-out");
+      setTimeout(() => card.remove(), 150);
+    }
+  });
+
+  // 2. Cập nhật active state của các card còn lại
+  Array.from(grid.querySelectorAll(".window-card")).forEach(card => {
+    const isActive = state.selectedWindow && String(state.selectedWindow.hwnd) === card.dataset.hwnd;
+    card.classList.toggle("active", isActive);
+  });
+
+  // 3. Thêm card mới cho những cửa sổ mới xuất hiện
+  const existingHwnds = new Set(
+    Array.from(grid.querySelectorAll(".window-card")).map(c => c.dataset.hwnd)
+  );
+  for (const w of windows) {
+    const hwndStr = String(w.hwnd || "");
+    if (!existingHwnds.has(hwndStr)) {
+      const card = _makeWindowCard(w);
+      card.style.opacity = "0";
+      grid.appendChild(card);
+      // Fade-in
+      requestAnimationFrame(() => { card.style.opacity = ""; });
+    }
+  }
+
+  // 4. Cập nhật preview cho cửa sổ đang chọn (nếu vẫn còn tồn tại)
+  if (state.selectedWindow) {
+    const stillExists = newWindowMap.get(String(state.selectedWindow.hwnd));
+    if (stillExists) {
+      state.selectedWindow = { ...state.selectedWindow, ...stillExists };
+      loadWindowPreview(state.selectedWindow);
+    }
+  }
+}
+
+function _makeWindowCard(w) {
+  const card = document.createElement("div");
+  const isActive = state.selectedWindow && String(state.selectedWindow.hwnd) === String(w.hwnd || "");
+  card.className = "window-card" + (isActive ? " active" : "");
+  card.dataset.title = (w.title || "").toLowerCase();
+  card.dataset.hwnd = w.hwnd || "";
+  card.innerHTML = `<div class="wc-title" title="${escHtml(w.title)}">${escHtml(w.title)}</div>`;
+  card.addEventListener("click", () => setSelectedWindow(w));
+  return card;
 }
 
 function setSelectedWindow(w) {
@@ -1041,6 +1117,7 @@ function clearWindowPreview() {
   await loadDisplays();
   await loadFiles();
   await loadAudioDevices();
+  startAutoRefresh();
 })();
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1175,3 +1252,36 @@ socket.on("schedule_event", (data) => {
     scheduleStatus.textContent = "";
   }
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// AUTO-REFRESH: Display previews & Window list
+// ══════════════════════════════════════════════════════════════════════
+const AUTO_REFRESH_DISPLAY_MS = 30_000;  // 30s: làm mới preview màn hình
+const AUTO_REFRESH_WINDOW_MS  = 15_000;  // 15s: làm mới danh sách cửa sổ
+
+let _autoRefreshDisplayTimer = null;
+let _autoRefreshWindowTimer  = null;
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+
+  // Refresh display previews mỗi 30s khi idle + đang ở tab màn hình
+  _autoRefreshDisplayTimer = setInterval(() => {
+    if (state.appState === "idle" && state.captureMode === "display") {
+      refreshPreviews();
+    }
+  }, AUTO_REFRESH_DISPLAY_MS);
+
+  // Refresh danh sách cửa sổ mỗi 15s khi idle + đang ở tab cửa sổ
+  // silentRefresh=true: giữ nguyên preview cửa sổ đang chọn, chỉ cập nhật danh sách
+  _autoRefreshWindowTimer = setInterval(() => {
+    if (state.appState === "idle" && state.captureMode === "window") {
+      loadWindows(true);
+    }
+  }, AUTO_REFRESH_WINDOW_MS);
+}
+
+function stopAutoRefresh() {
+  if (_autoRefreshDisplayTimer) { clearInterval(_autoRefreshDisplayTimer); _autoRefreshDisplayTimer = null; }
+  if (_autoRefreshWindowTimer)  { clearInterval(_autoRefreshWindowTimer);  _autoRefreshWindowTimer  = null; }
+}
