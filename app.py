@@ -872,40 +872,40 @@ def api_window_preview():
 
         frame_full = None
 
-        # ── Bước 1: mss screen grab (đáng tin cậy nhất khi cửa sổ visible) ──
+        # ── Bước 1: PrintWindow (chụp trực tiếp bộ nhớ của cửa sổ) ──────────────
+        logger.info("[WindowPreview] Bước 1: PrintWindow hwnd=%s size=%dx%d", hwnd, req_w, req_h)
         try:
-            import mss as _mss
-            mon = {"left": rect.left, "top": rect.top, "width": real_w, "height": real_h}
-            logger.info("[WindowPreview] mss grab: %s", mon)
-            with _mss.mss() as sct:
-                shot = sct.grab(mon)
-            arr = np.array(shot, dtype=np.uint8)
-            frame_mss = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-            mss_mean = float(frame_mss.mean())
-            logger.info("[WindowPreview] mss mean=%.2f shape=%s", mss_mean, frame_mss.shape)
-            if mss_mean > 5.0:
-                frame_full = frame_mss
-            else:
-                logger.warning("[WindowPreview] mss trả về ảnh đen (mean=%.2f)", mss_mean)
-        except Exception as mss_exc:
-            logger.warning("[WindowPreview] mss exception: %s", mss_exc)
-
-        # ── Bước 2: PrintWindow fallback ──────────────────────────────
-        if frame_full is None:
-            logger.info("[WindowPreview] Bước 2: PrintWindow hwnd=%s size=%dx%d", hwnd, req_w, req_h)
-            try:
-                frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
-                if frame_pw is not None:
-                    pw_mean = float(frame_pw.mean())
-                    logger.info("[WindowPreview] PrintWindow mean=%.2f", pw_mean)
-                    if pw_mean > 5.0:
-                        frame_full = frame_pw
-                    else:
-                        logger.warning("[WindowPreview] PrintWindow cũng đen (mean=%.2f)", pw_mean)
+            frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, req_w, req_h)
+            if frame_pw is not None:
+                pw_mean = float(frame_pw.mean())
+                logger.info("[WindowPreview] PrintWindow mean=%.2f", pw_mean)
+                if pw_mean > 5.0:
+                    frame_full = frame_pw
                 else:
-                    logger.warning("[WindowPreview] PrintWindow trả về None")
-            except Exception as pw_exc:
-                logger.warning("[WindowPreview] PrintWindow exception: %s", pw_exc)
+                    logger.warning("[WindowPreview] PrintWindow trả về ảnh đen (mean=%.2f)", pw_mean)
+            else:
+                logger.warning("[WindowPreview] PrintWindow trả về None")
+        except Exception as pw_exc:
+            logger.warning("[WindowPreview] PrintWindow exception: %s", pw_exc)
+
+        # ── Bước 2: mss screen grab (fallback nếu PrintWindow thất bại / đen) ──
+        if frame_full is None:
+            try:
+                import mss as _mss
+                mon = {"left": rect.left, "top": rect.top, "width": real_w, "height": real_h}
+                logger.info("[WindowPreview] Bước 2: mss grab fallback: %s", mon)
+                with _mss.mss() as sct:
+                    shot = sct.grab(mon)
+                arr = np.array(shot, dtype=np.uint8)
+                frame_mss = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+                mss_mean = float(frame_mss.mean())
+                logger.info("[WindowPreview] mss mean=%.2f shape=%s", mss_mean, frame_mss.shape)
+                if mss_mean > 5.0:
+                    frame_full = frame_mss
+                else:
+                    logger.warning("[WindowPreview] mss cũng trả về ảnh đen (mean=%.2f)", mss_mean)
+            except Exception as mss_exc:
+                logger.warning("[WindowPreview] mss exception: %s", mss_exc)
 
         if frame_full is None:
             logger.error("[WindowPreview] Tất cả phương pháp thất bại cho hwnd=%s title=%r", hwnd, title)

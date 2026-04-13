@@ -20,22 +20,22 @@ const state = {
 };
 
 // ── Elements ─────────────────────────────────────────────────────────
-const recBtn        = document.getElementById("rec-button");
-const recLabel      = document.getElementById("rec-label");
-const recIcon       = recBtn.querySelector(".rec-icon");
-const timerEl       = document.getElementById("timer");
+const recBtn = document.getElementById("rec-button");
+const recLabel = document.getElementById("rec-label");
+const recIcon = recBtn.querySelector(".rec-icon");
+const timerEl = document.getElementById("timer");
 // status-dot and label now inline (header still keeps them for compat)
-const statusDot     = document.getElementById("status-dot") || document.createElement('span');
-const statusLabel   = document.getElementById("status-label") || document.createElement('span');
-const statusDotInline  = document.getElementById("status-dot-inline");
+const statusDot = document.getElementById("status-dot") || document.createElement('span');
+const statusLabel = document.getElementById("status-label") || document.createElement('span');
+const statusDotInline = document.getElementById("status-dot-inline");
 const statusLabelInline = document.getElementById("status-label-inline");
-const micBar        = document.getElementById("mic-bar");
-const spkBar        = document.getElementById("spk-bar");
-const micDb         = document.getElementById("mic-db");
-const spkDb         = document.getElementById("spk-db");
-const jobSection    = document.getElementById("job-progress");
-const displayGrid   = document.getElementById("display-grid");
-const recDispLabel  = document.getElementById("recording-display-label");
+const micBar = document.getElementById("mic-bar");
+const spkBar = document.getElementById("spk-bar");
+const micDb = document.getElementById("mic-db");
+const spkDb = document.getElementById("spk-db");
+const jobSection = document.getElementById("job-progress");
+const displayGrid = document.getElementById("display-grid");
+const recDispLabel = document.getElementById("recording-display-label");
 const detectorStatus = document.getElementById("detector-status");
 const autoDetectToggle = document.getElementById("auto-detect-toggle");
 
@@ -112,7 +112,7 @@ function startSilenceMonitoring() {
   if (_silenceInterval) clearInterval(_silenceInterval);
   _silenceInterval = setInterval(() => {
     const isSilent = _lastMicLevel < SILENCE_CFG.THRESHOLD &&
-                     _lastSpkLevel < SILENCE_CFG.THRESHOLD;
+      _lastSpkLevel < SILENCE_CFG.THRESHOLD;
     if (isSilent) {
       // P1: Use real elapsed time (immune to tab throttling)
       const elapsedS = (Date.now() - _silenceStartMs) / 1000;
@@ -223,7 +223,7 @@ function updateMeter(barId, dbId, level) {
   const bar = document.getElementById(barId);
   const dbEl = document.getElementById(dbId);
   bar.style.width = (level * 100) + "%";
-  
+
   if (level >= 0.85) {
     bar.classList.add("red");
     bar.classList.remove("yellow", "bg-green");
@@ -244,9 +244,9 @@ function updateMeter(barId, dbId, level) {
 // ══════════════════════════════════════════════════════════════════════
 function getRecordMode() {
   const val = document.querySelector('input[name="record-mode"]:checked')?.value ?? "mp4_mp3";
-  if (val === "mp3_only")  return { merge_audio: false, convert_mp3: true  };
-  if (val === "mp4_only")  return { merge_audio: true,  convert_mp3: false };
-  return                          { merge_audio: true,  convert_mp3: true  }; // mp4_mp3
+  if (val === "mp3_only") return { merge_audio: false, convert_mp3: true };
+  if (val === "mp4_only") return { merge_audio: true, convert_mp3: false };
+  return { merge_audio: true, convert_mp3: true }; // mp4_mp3
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -268,12 +268,12 @@ async function startRecording() {
     // Nếu đang ở chế độ ghi cửa sổ và đã chọn cửa sổ
     if (state.captureMode === "window" && state.selectedWindow) {
       body.window_region = {
-        left:   state.selectedWindow.left,
-        top:    state.selectedWindow.top,
-        width:  state.selectedWindow.width,
+        left: state.selectedWindow.left,
+        top: state.selectedWindow.top,
+        width: state.selectedWindow.width,
         height: state.selectedWindow.height,
-        title:  state.selectedWindow.title || "",
-        hwnd:   state.selectedWindow.hwnd || null,
+        title: state.selectedWindow.title || "",
+        hwnd: state.selectedWindow.hwnd || null,
       };
     }
     const res = await fetch("/api/start", {
@@ -382,18 +382,18 @@ document.getElementById("silence-continue").addEventListener("click", () => {
 // ══════════════════════════════════════════════════════════════════════
 // SOURCE TABS + DISPLAY SELECTOR
 // ══════════════════════════════════════════════════════════════════════
-const srcTabDisplay   = document.getElementById("src-tab-display");
-const srcTabWindow    = document.getElementById("src-tab-window");
+const srcTabDisplay = document.getElementById("src-tab-display");
+const srcTabWindow = document.getElementById("src-tab-window");
 const srcPanelDisplay = document.getElementById("src-panel-display");
-const srcPanelWindow  = document.getElementById("src-panel-window");
+const srcPanelWindow = document.getElementById("src-panel-window");
 
 function switchSourceTab(mode) {
   state.captureMode = mode;
   const isWin = mode === "window";
   if (srcTabDisplay) srcTabDisplay.classList.toggle("active", !isWin);
-  if (srcTabWindow)  srcTabWindow.classList.toggle("active",  isWin);
+  if (srcTabWindow) srcTabWindow.classList.toggle("active", isWin);
   if (srcPanelDisplay) srcPanelDisplay.classList.toggle("hidden", isWin);
-  if (srcPanelWindow)  srcPanelWindow.classList.toggle("hidden", !isWin);
+  if (srcPanelWindow) srcPanelWindow.classList.toggle("hidden", !isWin);
   if (isWin) {
     loadWindows();
     updateSourcePreview("", "");
@@ -404,7 +404,7 @@ function switchSourceTab(mode) {
 }
 
 if (srcTabDisplay) srcTabDisplay.addEventListener("click", () => switchSourceTab("display"));
-if (srcTabWindow)  srcTabWindow.addEventListener("click",  () => switchSourceTab("window"));
+if (srcTabWindow) srcTabWindow.addEventListener("click", () => switchSourceTab("window"));
 
 async function loadDisplays() {
   displayGrid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;padding:6px 0;">Đang tải…</div>';
@@ -419,14 +419,14 @@ async function loadDisplays() {
 
 function updateSourcePreview(b64, label) {
   const img = document.getElementById("source-preview-img");
-  const ph  = document.getElementById("source-preview-placeholder");
+  const ph = document.getElementById("source-preview-placeholder");
   const lbl = document.getElementById("source-preview-label");
   if (b64) {
     if (img) { img.src = `data:image/jpeg;base64,${b64}`; img.style.display = "block"; }
-    if (ph)  ph.style.display = "none";
+    if (ph) ph.style.display = "none";
   } else {
     if (img) { img.src = ""; img.style.display = "none"; }
-    if (ph)  { ph.style.display = "block"; ph.textContent = "Chọn nguồn để xem trước"; }
+    if (ph) { ph.style.display = "block"; ph.textContent = "Chọn nguồn để xem trước"; }
   }
   if (lbl) lbl.textContent = label || "";
 }
@@ -441,7 +441,7 @@ function renderDisplayCards(displays) {
     const card = document.createElement("div");
     card.className = "display-card" + (d.index === state.selectedDisplay ? " active" : "");
     card.dataset.index = d.index;
-    card.dataset.b64   = d.preview_b64 || "";
+    card.dataset.b64 = d.preview_b64 || "";
     card.innerHTML = `<div class="display-label">${escHtml(d.name)}${d.is_primary ? ' <span style="font-size:9px;color:#555;">[P]</span>' : ''}</div>`;
     card.addEventListener("click", () => setSelectedDisplay(d.index, d.name));
     displayGrid.appendChild(card);
@@ -473,7 +473,7 @@ function setSelectedDisplay(index, name) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ default_display_index: index }),
-    }).catch(() => {});
+    }).catch(() => { });
   }
 }
 
@@ -554,12 +554,12 @@ socket.on("job_progress", ({ stage, message, log_type, current_step, total_steps
   const logContainer = document.getElementById("log-container");
   const stepIndicator = document.getElementById("step-indicator");
   jobSection.classList.remove("hidden");
-  
+
   // Cập nhật step indicator
   if (current_step && total_steps) {
     stepIndicator.textContent = `Bước ${current_step} / ${total_steps}`;
   }
-  
+
   // Thêm log entry
   const entry = document.createElement("div");
   entry.className = `log-entry log-${log_type || 'info'}`;
@@ -567,7 +567,7 @@ socket.on("job_progress", ({ stage, message, log_type, current_step, total_steps
   entry.textContent = `[${timestamp}] ${message || stage}`;
   logContainer.appendChild(entry);
   logContainer.scrollTop = logContainer.scrollHeight;
-  
+
   if (stage === "done" || stage === "error") {
     setTimeout(() => {
       jobSection.classList.add("hidden");
@@ -689,9 +689,9 @@ function updateMergeSelects(files) {
 }
 
 document.getElementById("btn-manual-merge").addEventListener("click", async () => {
-  const video    = document.getElementById("sel-merge-video").value;
-  const audio    = document.getElementById("sel-merge-audio").value;
-  const offset   = parseInt(document.getElementById("inp-merge-offset").value) || 0;
+  const video = document.getElementById("sel-merge-video").value;
+  const audio = document.getElementById("sel-merge-audio").value;
+  const offset = parseInt(document.getElementById("inp-merge-offset").value) || 0;
   const statusEl = document.getElementById("merge-status");
 
   if (!video) { alert("Vui lòng chọn file video."); return; }
@@ -828,14 +828,14 @@ document.getElementById("opt-mic-gain").addEventListener("change", (e) => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mic_gain: parseInt(e.target.value) }),
-  }).catch(() => {});
+  }).catch(() => { });
 });
 document.getElementById("opt-spk-gain").addEventListener("change", (e) => {
   fetch("/api/config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ speaker_gain: parseInt(e.target.value) }),
-  }).catch(() => {});
+  }).catch(() => { });
 });
 document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
   radio.addEventListener("change", (e) => {
@@ -843,7 +843,7 @@ document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ record_mode_default: e.target.value }),
-    }).catch(() => {});
+    }).catch(() => { });
   });
 });
 
@@ -887,7 +887,7 @@ function renderWindowGrid(windows) {
     const card = document.createElement("div");
     card.className = "window-card" + (state.selectedWindow && state.selectedWindow.hwnd === w.hwnd ? " active" : "");
     card.dataset.title = (w.title || "").toLowerCase();
-    card.dataset.hwnd  = w.hwnd || "";
+    card.dataset.hwnd = w.hwnd || "";
     card.innerHTML = `<div class="wc-title" title="${escHtml(w.title)}">${escHtml(w.title)}</div>`;
     card.addEventListener("click", () => setSelectedWindow(w));
     grid.appendChild(card);
@@ -933,27 +933,27 @@ if (btnRefreshWindows) btnRefreshWindows.addEventListener("click", loadWindows);
 
 async function loadWindowPreview(win) {
   const img = document.getElementById("source-preview-img");
-  const ph  = document.getElementById("source-preview-placeholder");
+  const ph = document.getElementById("source-preview-placeholder");
   const lbl = document.getElementById("source-preview-label");
   if (!img) return;
   if (img) { img.src = ""; img.style.display = "none"; }
-  if (ph)  { ph.style.display = "block"; ph.textContent = "⏳ Đang tải preview..."; }
+  if (ph) { ph.style.display = "block"; ph.textContent = "⏳ Đang tải preview..."; }
   if (lbl) lbl.textContent = win.title;
   try {
     const res = await fetch("/api/windows/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        hwnd:   win.hwnd || null,
-        title:  win.title,
-        width:  win.width,
+        hwnd: win.hwnd || null,
+        title: win.title,
+        width: win.width,
         height: win.height,
       }),
     });
     const data = await res.json();
     if (data.ok && data.preview_b64) {
       if (img) { img.src = `data:image/jpeg;base64,${data.preview_b64}`; img.style.display = "block"; }
-      if (ph)  ph.style.display = "none";
+      if (ph) ph.style.display = "none";
     } else {
       if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ ${data.error || "Không lấy được preview"}`; }
     }
@@ -991,14 +991,14 @@ function clearWindowPreview() {
     if (micDevSel && cfg.mic_device_index != null) {
       micDevSel.value = cfg.mic_device_index;
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // Restore status
   try {
     const res = await fetch("/api/status");
-    const d   = await res.json();
+    const d = await res.json();
     applyState(d.state, d.duration_seconds || 0);
-  } catch (_) {}
+  } catch (_) { }
 
   await loadDisplays();
   await loadFiles();
@@ -1039,7 +1039,7 @@ async function loadAudioDevices() {
     const cfgRes = await fetch("/api/config");
     const cfg = await cfgRes.json();
     if (cfg.mic_device_index != null) sel.value = cfg.mic_device_index;
-  } catch (_) {}
+  } catch (_) { }
 }
 
 const micDevSel = document.getElementById("mic-device-select");
@@ -1050,7 +1050,7 @@ if (micDevSel) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mic_device_index: val }),
-    }).catch(() => {});
+    }).catch(() => { });
   });
 }
 
@@ -1060,9 +1060,9 @@ if (micDevSel) {
 let _scheduleCountdown = null;
 
 const btnScheduleStart = document.getElementById("btn-schedule-start");
-const btnScheduleStop  = document.getElementById("btn-schedule-stop");
+const btnScheduleStop = document.getElementById("btn-schedule-stop");
 const btnScheduleCancel = document.getElementById("btn-schedule-cancel");
-const scheduleStatus   = document.getElementById("schedule-status");
+const scheduleStatus = document.getElementById("schedule-status");
 
 if (btnScheduleStart) {
   btnScheduleStart.addEventListener("click", async () => {
