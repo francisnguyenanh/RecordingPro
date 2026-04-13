@@ -15,24 +15,39 @@ const state = {
   toastTimer: null,
   timerInterval: null,
   seconds: 0,
+  captureMode: "display",     // "display" | "window"
+  selectedWindow: null,       // {title, left, top, width, height}
 };
 
 // ── Elements ─────────────────────────────────────────────────────────
-const recBtn        = document.getElementById("rec-button");
-const recLabel      = document.getElementById("rec-label");
-const recIcon       = recBtn.querySelector(".rec-icon");
-const timerEl       = document.getElementById("timer");
-const statusDot     = document.getElementById("status-dot");
-const statusLabel   = document.getElementById("status-label");
-const micBar        = document.getElementById("mic-bar");
-const spkBar        = document.getElementById("spk-bar");
-const micDb         = document.getElementById("mic-db");
-const spkDb         = document.getElementById("spk-db");
-const jobSection    = document.getElementById("job-progress");
-const displayGrid   = document.getElementById("display-grid");
-const recDispLabel  = document.getElementById("recording-display-label");
+const recBtn = document.getElementById("rec-button");
+const recLabel = document.getElementById("rec-label");
+const recIcon = recBtn.querySelector(".rec-icon");
+const timerEl = document.getElementById("timer");
+// status-dot and label now inline (header still keeps them for compat)
+const statusDot = document.getElementById("status-dot") || document.createElement('span');
+const statusLabel = document.getElementById("status-label") || document.createElement('span');
+const statusDotInline = document.getElementById("status-dot-inline");
+const statusLabelInline = document.getElementById("status-label-inline");
+const micBar = document.getElementById("mic-bar");
+const spkBar = document.getElementById("spk-bar");
+const micDb = document.getElementById("mic-db");
+const spkDb = document.getElementById("spk-db");
+const jobSection = document.getElementById("job-progress");
+const displayGrid = document.getElementById("display-grid");
+const recDispLabel = document.getElementById("recording-display-label");
 const detectorStatus = document.getElementById("detector-status");
 const autoDetectToggle = document.getElementById("auto-detect-toggle");
+
+function _setStatusUI(newState) {
+  const cls = newState === 'recording' ? 'recording' : newState === 'processing' ? 'processing' : '';
+  [statusDot, statusDotInline].forEach(el => { if (el) el.className = `status-dot ${newState} w-2.5 h-2.5 rounded-full bg-[#444] inline-block transition-colors`; });
+  if (statusDotInline) { statusDotInline.className = `w-2 h-2 rounded-full bg-[#444] inline-block ${cls}`; }
+  const labels = { idle: 'SẴN SÀNG', recording: 'ĐANG GHI', processing: 'ĐANG XỬ LÝ' };
+  const lbl = labels[newState] || newState.toUpperCase();
+  if (statusLabel) statusLabel.textContent = lbl;
+  if (statusLabelInline) statusLabelInline.textContent = lbl;
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // TIMER
@@ -55,13 +70,111 @@ function stopTimer() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// METHOD 1: TAB TITLE — hiển thị thời gian ghi trên tab trình duyệt
+// ══════════════════════════════════════════════════════════════════════
+const BASE_TITLE = "Tomo Recording";
+let titleUpdateInterval = null;
+
+function startTitleUpdater() {
+  if (titleUpdateInterval) clearInterval(titleUpdateInterval);
+  titleUpdateInterval = setInterval(() => {
+    document.title = `🔴 ${formatTime(state.seconds)} • ${BASE_TITLE}`;
+  }, 1000);
+}
+
+function stopTitleUpdater() {
+  if (titleUpdateInterval) { clearInterval(titleUpdateInterval); titleUpdateInterval = null; }
+  document.title = BASE_TITLE;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// METHOD 3: SILENCE DETECTION — cảnh báo khi không có âm thanh 3 phút
+// NOTE: level_update gửi giá trị 0.0–1.0 (float), không phải dB
+// ══════════════════════════════════════════════════════════════════════
+const SILENCE_CFG = {
+  THRESHOLD: 0.001,          // dưới ngưỡng này coi là im lặng (~–60 dB)
+  WARNING_AFTER_S: 180,      // cảnh báo sau 3 phút im lặng liên tục
+  TOAST_DURATION_MS: 15000,  // toast tự đóng sau 15 giây
+};
+
+let _lastMicLevel = 0;
+let _lastSpkLevel = 0;
+let _silenceStartMs = 0;        // P1: timestamp-based instead of tick
+let _silenceInterval = null;
+let _silenceToastTimer = null;
+let _silenceNotified = false;
+
+function startSilenceMonitoring() {
+  _silenceNotified = false;
+  _lastMicLevel = 0;
+  _lastSpkLevel = 0;
+  _silenceStartMs = Date.now();
+  if (_silenceInterval) clearInterval(_silenceInterval);
+  _silenceInterval = setInterval(() => {
+    const isSilent = _lastMicLevel < SILENCE_CFG.THRESHOLD &&
+      _lastSpkLevel < SILENCE_CFG.THRESHOLD;
+    if (isSilent) {
+      // P1: Use real elapsed time (immune to tab throttling)
+      const elapsedS = (Date.now() - _silenceStartMs) / 1000;
+      if (elapsedS >= SILENCE_CFG.WARNING_AFTER_S && !_silenceNotified) {
+        _silenceNotified = true;
+        showSilenceToast();
+      }
+    } else {
+      _silenceStartMs = Date.now();
+      _silenceNotified = false;
+      dismissSilenceToast();
+    }
+  }, 1000);
+}
+
+function stopSilenceMonitoring() {
+  if (_silenceInterval) { clearInterval(_silenceInterval); _silenceInterval = null; }
+  _silenceStartMs = 0;
+  _silenceNotified = false;
+  dismissSilenceToast();
+}
+
+function showSilenceToast() {
+  const mins = Math.floor(SILENCE_CFG.WARNING_AFTER_S / 60);
+  document.getElementById("silence-duration").textContent = `${mins} phút`;
+  const toast = document.getElementById("silence-check-toast");
+  toast.classList.remove("hidden");
+  // animate timer bar
+  const bar = document.getElementById("silence-timer-bar");
+  bar.style.transition = "none";
+  bar.style.width = "100%";
+  requestAnimationFrame(() => {
+    bar.style.transition = `width ${SILENCE_CFG.TOAST_DURATION_MS / 1000}s linear`;
+    bar.style.width = "0%";
+  });
+  _silenceToastTimer = setTimeout(() => {
+    dismissSilenceToast();
+    stopRecording();
+  }, SILENCE_CFG.TOAST_DURATION_MS);
+}
+
+function dismissSilenceToast() {
+  if (_silenceToastTimer) { clearTimeout(_silenceToastTimer); _silenceToastTimer = null; }
+  const toast = document.getElementById("silence-check-toast");
+  if (toast) toast.classList.add("hidden");
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // UI STATE
 // ══════════════════════════════════════════════════════════════════════
 function applyState(newState, durationSeconds = 0) {
   state.appState = newState;
-  statusDot.className = `status-dot ${newState}`;
-  const labels = { idle: "SẴN SÀNG", recording: "ĐANG GHI", processing: "ĐANG XỬ LÝ" };
-  statusLabel.textContent = labels[newState] || newState.toUpperCase();
+  _setStatusUI(newState);
+
+  const isBusy = newState !== "idle";
+  document.querySelectorAll('input[name="record-mode"]').forEach(r => r.disabled = isBusy);
+  document.getElementById("opt-mic-gain").disabled = isBusy;
+  document.getElementById("opt-spk-gain").disabled = isBusy;
+  document.querySelectorAll('.record-mode-group, #opt-mic-gain, #opt-spk-gain').forEach(el => {
+    el.style.opacity = isBusy ? '0.5' : '1';
+    el.style.pointerEvents = isBusy ? 'none' : 'auto';
+  });
 
   if (newState === "recording") {
     recBtn.classList.add("recording");
@@ -73,7 +186,11 @@ function applyState(newState, durationSeconds = 0) {
     micBar.classList.add("breathing");
     spkBar.classList.add("breathing");
     recDispLabel.classList.remove("hidden");
-    recDispLabel.textContent = `● Đang ghi: ${state.selectedDisplayName}`;
+    if (state.captureMode === "window" && state.selectedWindow) {
+      recDispLabel.textContent = `● Đang ghi: ${state.selectedWindow.title}`;
+    } else {
+      recDispLabel.textContent = `● Đang ghi: ${state.selectedDisplayName}`;
+    }
   } else if (newState === "processing") {
     recBtn.classList.remove("recording");
     recBtn.classList.add("processing");
@@ -106,11 +223,30 @@ function updateMeter(barId, dbId, level) {
   const bar = document.getElementById(barId);
   const dbEl = document.getElementById(dbId);
   bar.style.width = (level * 100) + "%";
-  bar.className = "level-bar" + (
-    state.appState === "recording" ? " breathing" : ""
-  ) + (level >= 0.85 ? " red" : level >= 0.6 ? " yellow" : "");
+
+  if (level >= 0.85) {
+    bar.classList.add("red");
+    bar.classList.remove("yellow", "bg-green");
+  } else if (level >= 0.6) {
+    bar.classList.add("yellow");
+    bar.classList.remove("red", "bg-green");
+  } else {
+    bar.classList.add("bg-green");
+    bar.classList.remove("red", "yellow");
+  }
+
   const db = level < 0.001 ? "–∞" : (20 * Math.log10(level)).toFixed(1) + " dB";
   dbEl.textContent = db;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// RECORD MODE EXTRACTOR
+// ══════════════════════════════════════════════════════════════════════
+function getRecordMode() {
+  const val = document.querySelector('input[name="record-mode"]:checked')?.value ?? "mp4_mp3";
+  if (val === "mp3_only") return { merge_audio: false, convert_mp3: true };
+  if (val === "mp4_only") return { merge_audio: true, convert_mp3: false };
+  return { merge_audio: true, convert_mp3: true }; // mp4_mp3
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -122,12 +258,24 @@ recBtn.addEventListener("click", async () => {
 });
 
 async function startRecording() {
+  startTitleUpdater();
+  startSilenceMonitoring();
   try {
     const body = {
       display_index: state.selectedDisplay,
-      merge_audio: document.getElementById("opt-merge").checked,
-      convert_mp3: document.getElementById("opt-mp3").checked,
+      ...getRecordMode()
     };
+    // Nếu đang ở chế độ ghi cửa sổ và đã chọn cửa sổ
+    if (state.captureMode === "window" && state.selectedWindow) {
+      body.window_region = {
+        left: state.selectedWindow.left,
+        top: state.selectedWindow.top,
+        width: state.selectedWindow.width,
+        height: state.selectedWindow.height,
+        title: state.selectedWindow.title || "",
+        hwnd: state.selectedWindow.hwnd || null,
+      };
+    }
     const res = await fetch("/api/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -141,10 +289,11 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  stopTitleUpdater();
+  stopSilenceMonitoring();
   try {
     const body = {
-      merge_audio: document.getElementById("opt-merge").checked,
-      convert_mp3: document.getElementById("opt-mp3").checked,
+      ...getRecordMode(),
       mic_gain: parseInt(document.getElementById("opt-mic-gain").value) || 1,
       speaker_gain: parseInt(document.getElementById("opt-spk-gain").value) || 1,
     };
@@ -222,98 +371,136 @@ function hideToast() {
 document.getElementById("toast-stop").addEventListener("click", () => { hideToast(); stopRecording(); });
 document.getElementById("toast-continue").addEventListener("click", hideToast);
 
+document.getElementById("silence-stop").addEventListener("click", () => { dismissSilenceToast(); stopRecording(); });
+document.getElementById("silence-continue").addEventListener("click", () => {
+  dismissSilenceToast();
+  // reset silence counter so it can warn again after another 3 minutes
+  _silenceStartMs = Date.now();
+  _silenceNotified = false;
+});
+
 // ══════════════════════════════════════════════════════════════════════
-// DISPLAY SELECTOR
+// SOURCE TABS + DISPLAY SELECTOR
 // ══════════════════════════════════════════════════════════════════════
+const srcTabDisplay = document.getElementById("src-tab-display");
+const srcTabWindow = document.getElementById("src-tab-window");
+const srcPanelDisplay = document.getElementById("src-panel-display");
+const srcPanelWindow = document.getElementById("src-panel-window");
+
+function switchSourceTab(mode) {
+  state.captureMode = mode;
+  const isWin = mode === "window";
+  if (srcTabDisplay) srcTabDisplay.classList.toggle("active", !isWin);
+  if (srcTabWindow) srcTabWindow.classList.toggle("active", isWin);
+  if (srcPanelDisplay) srcPanelDisplay.classList.toggle("hidden", isWin);
+  if (srcPanelWindow) srcPanelWindow.classList.toggle("hidden", !isWin);
+  if (isWin) {
+    loadWindows();
+    updateSourcePreview("", "");
+  } else {
+    const selCard = displayGrid.querySelector(`[data-index="${state.selectedDisplay}"]`);
+    updateSourcePreview(selCard ? (selCard.dataset.b64 || "") : "", state.selectedDisplayName);
+  }
+}
+
+if (srcTabDisplay) srcTabDisplay.addEventListener("click", () => switchSourceTab("display"));
+if (srcTabWindow) srcTabWindow.addEventListener("click", () => switchSourceTab("window"));
+
 async function loadDisplays() {
-  displayGrid.innerHTML = '<div class="display-card-loading">Đang tải danh sách màn hình…</div>';
+  displayGrid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;padding:6px 0;">Đang tải…</div>';
   try {
     const res = await fetch("/api/displays?preview=true");
     const displays = await res.json();
     renderDisplayCards(displays);
   } catch (err) {
-    displayGrid.innerHTML = '<div class="display-card-loading">Không thể tải màn hình.</div>';
+    displayGrid.innerHTML = '<div style="color:#666;font-size:11px;">Không thể tải màn hình.</div>';
   }
+}
+
+function updateSourcePreview(b64, label) {
+  const img = document.getElementById("source-preview-img");
+  const ph = document.getElementById("source-preview-placeholder");
+  const lbl = document.getElementById("source-preview-label");
+  if (b64) {
+    if (img) { img.src = `data:image/jpeg;base64,${b64}`; img.style.display = "block"; }
+    if (ph) ph.style.display = "none";
+  } else {
+    if (img) { img.src = ""; img.style.display = "none"; }
+    if (ph) { ph.style.display = "block"; ph.textContent = "Chọn nguồn để xem trước"; }
+  }
+  if (lbl) lbl.textContent = label || "";
 }
 
 function renderDisplayCards(displays) {
   displayGrid.innerHTML = "";
   if (!displays || displays.length === 0) {
-    displayGrid.innerHTML = '<div class="display-card-loading">Không tìm thấy màn hình.</div>';
+    displayGrid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;">Không tìm thấy màn hình.</div>';
     return;
   }
   for (const d of displays) {
     const card = document.createElement("div");
     card.className = "display-card" + (d.index === state.selectedDisplay ? " active" : "");
     card.dataset.index = d.index;
-
-    const imgSrc = d.preview_b64
-      ? `data:image/jpeg;base64,${d.preview_b64}`
-      : "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // 1px transparent
-
-    card.innerHTML = `
-      <img class="display-preview" src="${imgSrc}" alt="${escHtml(d.name)}" loading="lazy" />
-      <div class="display-label">${escHtml(d.name)}</div>
-      <div class="display-res">${d.width} × ${d.height}</div>
-    `;
+    card.dataset.b64 = d.preview_b64 || "";
+    card.innerHTML = `<div class="display-label">${escHtml(d.name)}${d.is_primary ? ' <span style="font-size:9px;color:#555;">[P]</span>' : ''}</div>`;
     card.addEventListener("click", () => setSelectedDisplay(d.index, d.name));
     displayGrid.appendChild(card);
+    if (d.index === state.selectedDisplay && d.preview_b64) {
+      updateSourcePreview(d.preview_b64, d.name);
+    }
   }
 }
 
 function setSelectedDisplay(index, name) {
   state.selectedDisplay = index;
   state.selectedDisplayName = name || `Display ${index}`;
-  // Update active class
   document.querySelectorAll(".display-card").forEach(c => {
     c.classList.toggle("active", parseInt(c.dataset.index) === index);
   });
+  const _dc = displayGrid.querySelector(`[data-index="${index}"]`);
+  if (_dc) updateSourcePreview(_dc.dataset.b64 || "", name);
 
   if (state.appState === "recording") {
-    // Chuyển màn hình ngay trong khi đang ghi
     fetch("/api/switch-display", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ display_index: index }),
     }).then(res => res.json()).then(data => {
-      if (data.ok) {
-        recDispLabel.textContent = `\u25CF Đang ghi: ${state.selectedDisplayName}`;
-      } else {
-        console.error("Lỗi chuyển màn hình:", data.error);
-      }
+      if (data.ok) recDispLabel.textContent = `● Đang ghi: ${state.selectedDisplayName}`;
     }).catch(err => console.error("Lỗi chuyển màn hình:", err));
   } else {
-    // Persist to config khi không ghi
     fetch("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ default_display_index: index }),
-    }).catch(() => {});
+    }).catch(() => { });
   }
 }
 
 async function refreshPreviews() {
-  document.getElementById("refresh-previews").textContent = "↺ Đang tải…";
-  document.getElementById("refresh-previews").disabled = true;
+  const btn = document.getElementById("refresh-previews");
+  if (btn) { btn.textContent = "↺ Đang tải…"; btn.disabled = true; }
   try {
     const res = await fetch("/api/displays/preview");
     const previews = await res.json();
     for (const p of previews) {
       const card = displayGrid.querySelector(`[data-index="${p.index}"]`);
       if (card && p.preview_b64) {
-        const img = card.querySelector(".display-preview");
-        if (img) img.src = `data:image/jpeg;base64,${p.preview_b64}`;
+        card.dataset.b64 = p.preview_b64;
+        if (parseInt(p.index) === state.selectedDisplay) {
+          updateSourcePreview(p.preview_b64, state.selectedDisplayName);
+        }
       }
     }
   } catch (err) {
     console.error("Lỗi làm mới xem trước:", err);
   } finally {
-    document.getElementById("refresh-previews").textContent = "↺ Làm mới xem trước";
-    document.getElementById("refresh-previews").disabled = false;
+    if (btn) { btn.textContent = "↺ Làm mới"; btn.disabled = false; }
   }
 }
 
-document.getElementById("refresh-previews").addEventListener("click", refreshPreviews);
+const _rp = document.getElementById("refresh-previews");
+if (_rp) _rp.addEventListener("click", refreshPreviews);
 
 // ══════════════════════════════════════════════════════════════════════
 // AUTO-DETECT TOGGLE
@@ -357,20 +544,22 @@ socket.on("status_update", ({ state: s, duration_seconds }) => {
 
 socket.on("level_update", ({ mic, speaker }) => {
   if (state.appState !== "recording") return;
-  updateMeter("mic-bar", "mic-db", mic || 0);
-  updateMeter("spk-bar", "spk-db", speaker || 0);
+  _lastMicLevel = mic || 0;
+  _lastSpkLevel = speaker || 0;
+  updateMeter("mic-bar", "mic-db", _lastMicLevel);
+  updateMeter("spk-bar", "spk-db", _lastSpkLevel);
 });
 
 socket.on("job_progress", ({ stage, message, log_type, current_step, total_steps }) => {
   const logContainer = document.getElementById("log-container");
   const stepIndicator = document.getElementById("step-indicator");
   jobSection.classList.remove("hidden");
-  
+
   // Cập nhật step indicator
   if (current_step && total_steps) {
     stepIndicator.textContent = `Bước ${current_step} / ${total_steps}`;
   }
-  
+
   // Thêm log entry
   const entry = document.createElement("div");
   entry.className = `log-entry log-${log_type || 'info'}`;
@@ -378,7 +567,7 @@ socket.on("job_progress", ({ stage, message, log_type, current_step, total_steps
   entry.textContent = `[${timestamp}] ${message || stage}`;
   logContainer.appendChild(entry);
   logContainer.scrollTop = logContainer.scrollHeight;
-  
+
   if (stage === "done" || stage === "error") {
     setTimeout(() => {
       jobSection.classList.add("hidden");
@@ -400,9 +589,14 @@ socket.on("call_ended", ({ app_name }) => {
   if (state.appState === "recording") showEndedToast(app_name);
 });
 socket.on("display_switched", ({ display_index }) => {
-  // Cập nhật label khi server xác nhận chuyển màn hình
   if (state.appState === "recording") {
-    recDispLabel.textContent = `\u25CF Đang ghi: ${state.selectedDisplayName}`;
+    recDispLabel.textContent = `● Đang ghi: ${state.selectedDisplayName}`;
+  }
+});
+
+socket.on("window_switched", ({ title }) => {
+  if (state.appState === "recording" && title) {
+    recDispLabel.textContent = `● Đang ghi: ${title}`;
   }
 });
 
@@ -411,9 +605,9 @@ socket.on("display_switched", ({ display_index }) => {
 // ══════════════════════════════════════════════════════════════════════
 async function loadFiles() {
   try {
-    const res = await fetch("/api/files");
-    const files = await res.json();
-    renderFiles(files);
+    const res = await fetch("/api/files?per_page=200");
+    const data = await res.json();
+    renderFiles(data.files || []);
   } catch (err) {
     console.error("Lỗi tải danh sách file:", err);
   }
@@ -495,9 +689,9 @@ function updateMergeSelects(files) {
 }
 
 document.getElementById("btn-manual-merge").addEventListener("click", async () => {
-  const video    = document.getElementById("sel-merge-video").value;
-  const audio    = document.getElementById("sel-merge-audio").value;
-  const offset   = parseInt(document.getElementById("inp-merge-offset").value) || 0;
+  const video = document.getElementById("sel-merge-video").value;
+  const audio = document.getElementById("sel-merge-audio").value;
+  const offset = parseInt(document.getElementById("inp-merge-offset").value) || 0;
   const statusEl = document.getElementById("merge-status");
 
   if (!video) { alert("Vui lòng chọn file video."); return; }
@@ -634,15 +828,259 @@ document.getElementById("opt-mic-gain").addEventListener("change", (e) => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mic_gain: parseInt(e.target.value) }),
-  }).catch(() => {});
+  }).catch(() => { });
 });
 document.getElementById("opt-spk-gain").addEventListener("change", (e) => {
   fetch("/api/config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ speaker_gain: parseInt(e.target.value) }),
-  }).catch(() => {});
+  }).catch(() => { });
 });
+document.querySelectorAll('input[name="record-mode"]').forEach(radio => {
+  radio.addEventListener("change", (e) => {
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ record_mode_default: e.target.value }),
+    }).catch(() => { });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: WINDOW CAPTURE SELECTION  (2-col grid in #window-grid)
+// ══════════════════════════════════════════════════════════════════════
+// silentRefresh=true: không xoá preview đang hiển thị (dùng cho auto-refresh)
+// ── P4: Throttle ── lưu snapshot hash để bỏ qua nếu danh sách không đổi
+let _lastWindowListHash = "";
+
+function _hashWindowList(windows) {
+  // Hash đơn giản: chuỗi nối hwnd+title của tất cả cửa sổ
+  return windows.map(w => `${w.hwnd}:${w.title}`).join("|");
+}
+
+async function loadWindows(silentRefresh = false) {
+  const grid = document.getElementById("window-grid");
+  if (!grid) return;
+  if (!silentRefresh) {
+    grid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;grid-column:1/-1;padding:6px 0;">Đang tải…</div>';
+    clearWindowPreview();
+  }
+  try {
+    const res = await fetch("/api/windows");
+    const windows = await res.json();
+
+    // ── P4: Throttle ── bỏ qua render nếu danh sách không thay đổi
+    if (silentRefresh) {
+      const newHash = _hashWindowList(windows);
+      if (newHash === _lastWindowListHash) return;  // không có gì thay đổi, bỏ qua
+      _lastWindowListHash = newHash;
+    } else {
+      _lastWindowListHash = _hashWindowList(windows);
+    }
+
+    renderWindowGrid(windows, silentRefresh);
+    // Hidden select for backward compat (startRecording reads state.selectedWindow directly)
+    const sel = document.getElementById("window-select");
+    if (sel) {
+      sel.innerHTML = '<option value="">—</option>';
+      for (const w of windows) {
+        const opt = document.createElement("option");
+        opt.value = JSON.stringify(w);
+        opt.textContent = w.title;
+        sel.appendChild(opt);
+      }
+    }
+  } catch (_) {
+    if (!silentRefresh && grid) grid.innerHTML = '<div style="color:#e55;font-size:11px;grid-column:1/-1;">Lỗi tải danh sách cửa sổ.</div>';
+  }
+}
+
+// silentRefresh=true: giữ active/preview của cửa sổ đang chọn, dùng diff-based update
+function renderWindowGrid(windows, silentRefresh = false) {
+  const grid = document.getElementById("window-grid");
+  if (!grid) return;
+
+  if (!windows || windows.length === 0) {
+    grid.innerHTML = '<div style="color:#666;font-size:11px;font-style:italic;grid-column:1/-1;">Không tìm thấy cửa sổ.</div>';
+    return;
+  }
+
+  if (!silentRefresh) {
+    // Manual refresh: render lại hoàn toàn (không cần tránh chớp nháy)
+    grid.innerHTML = "";
+    for (const w of windows) {
+      const card = _makeWindowCard(w);
+      grid.appendChild(card);
+    }
+    return;
+  }
+
+  // ── P1: Diff-based update (silentRefresh) ──────────────────────────
+  const newHwnds = new Set(windows.map(w => String(w.hwnd || "")));
+  const newWindowMap = new Map(windows.map(w => [String(w.hwnd || ""), w]));
+
+  // 1. Xoá card của cửa sổ không còn tồn tại (fade-out trước khi remove)
+  Array.from(grid.querySelectorAll(".window-card")).forEach(card => {
+    if (!newHwnds.has(card.dataset.hwnd)) {
+      card.classList.add("fade-out");
+      setTimeout(() => card.remove(), 150);
+    }
+  });
+
+  // 2. Cập nhật active state của các card còn lại
+  Array.from(grid.querySelectorAll(".window-card")).forEach(card => {
+    const isActive = state.selectedWindow && String(state.selectedWindow.hwnd) === card.dataset.hwnd;
+    card.classList.toggle("active", isActive);
+  });
+
+  // 3. Thêm card mới cho những cửa sổ mới xuất hiện
+  const existingHwnds = new Set(
+    Array.from(grid.querySelectorAll(".window-card")).map(c => c.dataset.hwnd)
+  );
+  for (const w of windows) {
+    const hwndStr = String(w.hwnd || "");
+    if (!existingHwnds.has(hwndStr)) {
+      const card = _makeWindowCard(w);
+      card.style.opacity = "0";
+      grid.appendChild(card);
+      // Fade-in
+      requestAnimationFrame(() => { card.style.opacity = ""; });
+    }
+  }
+
+  // 4. Cập nhật preview cho cửa sổ đang chọn (nếu vẫn còn tồn tại)
+  if (state.selectedWindow) {
+    const stillExists = newWindowMap.get(String(state.selectedWindow.hwnd));
+    if (stillExists) {
+      state.selectedWindow = { ...state.selectedWindow, ...stillExists };
+      loadWindowPreview(state.selectedWindow);
+    }
+  }
+}
+
+function _makeWindowCard(w) {
+  const card = document.createElement("div");
+  const isActive = state.selectedWindow && String(state.selectedWindow.hwnd) === String(w.hwnd || "");
+  card.className = "window-card" + (isActive ? " active" : "");
+  card.dataset.title = (w.title || "").toLowerCase();
+  card.dataset.hwnd = w.hwnd || "";
+  card.innerHTML = `<div class="wc-title" title="${escHtml(w.title)}">${escHtml(w.title)}</div>`;
+  card.addEventListener("click", () => setSelectedWindow(w));
+  return card;
+}
+
+function setSelectedWindow(w) {
+  state.selectedWindow = w;
+  // Update hidden select for compat
+  const sel = document.getElementById("window-select");
+  if (sel) sel.value = JSON.stringify(w) in Array.from(sel.options).map(o => o.value) ? JSON.stringify(w) : sel.value;
+  // Update active class
+  document.querySelectorAll(".window-card").forEach(c => {
+    c.classList.toggle("active", String(c.dataset.hwnd) === String(w.hwnd));
+  });
+  if (state.appState === "recording") {
+    // Switch window mid-recording
+    fetch("/api/switch-window", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ window_region: w }),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) recDispLabel.textContent = `● Đang ghi: ${w.title}`;
+    }).catch(err => console.error("Lỗi chuyển cửa sổ:", err));
+  }
+  loadWindowPreview(w);
+}
+
+// Search filter
+const _winSearch = document.getElementById("window-search");
+if (_winSearch) {
+  _winSearch.addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll(".window-card").forEach(c => {
+      c.style.display = (!q || c.dataset.title.includes(q)) ? "" : "none";
+    });
+  });
+}
+
+// Refresh button
+const btnRefreshWindows = document.getElementById("refresh-windows");
+if (btnRefreshWindows) btnRefreshWindows.addEventListener("click", loadWindows);
+
+async function loadWindowPreview(win) {
+  const img = document.getElementById("source-preview-img");
+  const ph = document.getElementById("source-preview-placeholder");
+  const lbl = document.getElementById("source-preview-label");
+  if (!img) return;
+  if (img) { img.src = ""; img.style.display = "none"; }
+  if (ph) { ph.style.display = "block"; ph.textContent = "⏳ Đang tải preview..."; }
+  if (lbl) lbl.textContent = win.title;
+  try {
+    const res = await fetch("/api/windows/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hwnd: win.hwnd || null,
+        title: win.title,
+        width: win.width,
+        height: win.height,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.preview_b64) {
+      if (img) { img.src = `data:image/jpeg;base64,${data.preview_b64}`; img.style.display = "block"; }
+      if (ph) ph.style.display = "none";
+
+      // Cập nhật kích thước thực từ server (sau khi maximize) để record dùng đúng kích thước
+      if (data.width && data.height && state.selectedWindow) {
+        state.selectedWindow.width  = data.width;
+        state.selectedWindow.height = data.height;
+      }
+
+      // Thông báo nếu cửa sổ đã được maximize tự động
+      if (data.was_maximized) {
+        _showWindowMaximizedHint(win.title);
+      }
+    } else {
+      if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ ${data.error || "Không lấy được preview"}`; }
+    }
+  } catch (err) {
+    if (ph) { ph.style.display = "block"; ph.textContent = `⚠️ Lỗi: ${err.message}`; }
+  }
+}
+
+function _showWindowMaximizedHint(title) {
+  // Hiển thị toast nhỏ thông báo cửa sổ đã được maximize
+  let hint = document.getElementById("win-maximize-hint");
+  if (!hint) {
+    hint = document.createElement("div");
+    hint.id = "win-maximize-hint";
+    hint.style.cssText = [
+      "position:fixed", "bottom:80px", "left:50%", "transform:translateX(-50%)",
+      "background:#1a3a2a", "color:#5dff9e", "border:1px solid #2ecc71",
+      "border-radius:8px", "padding:10px 18px", "font-size:12px",
+      "z-index:9999", "box-shadow:0 4px 16px rgba(0,0,0,.5)",
+      "max-width:340px", "text-align:center", "pointer-events:none",
+    ].join(";");
+    document.body.appendChild(hint);
+  }
+  hint.innerHTML = `🔼 <b>Đã maximize</b> cửa sổ "<span style="color:#fff">${escHtml(title)}</span>"<br><span style="opacity:.8;font-size:11px">Cửa sổ đang mở → có thể ghi bình thường</span>`;
+  hint.style.display = "block";
+  hint.style.opacity = "1";
+  clearTimeout(hint._timer);
+  hint._timer = setTimeout(() => {
+    hint.style.transition = "opacity 0.5s";
+    hint.style.opacity = "0";
+    setTimeout(() => { hint.style.display = "none"; hint.style.transition = ""; }, 500);
+  }, 4000);
+}
+
+
+function clearWindowPreview() {
+  updateSourcePreview("", "");
+}
+
+
 
 // ══════════════════════════════════════════════════════════════════════
 // INIT
@@ -658,15 +1096,192 @@ document.getElementById("opt-spk-gain").addEventListener("change", (e) => {
     updateDetectorStatus(state.autoDetect);
     document.getElementById("opt-mic-gain").value = cfg.mic_gain || 1;
     document.getElementById("opt-spk-gain").value = cfg.speaker_gain || 1;
-  } catch (_) {}
+    if (cfg.record_mode_default) {
+      const modeRadio = document.querySelector(`input[name="record-mode"][value="${cfg.record_mode_default}"]`);
+      if (modeRadio) modeRadio.checked = true;
+    }
+    // P3: Load mic device selection
+    const micDevSel = document.getElementById("mic-device-select");
+    if (micDevSel && cfg.mic_device_index != null) {
+      micDevSel.value = cfg.mic_device_index;
+    }
+  } catch (_) { }
 
   // Restore status
   try {
     const res = await fetch("/api/status");
-    const d   = await res.json();
+    const d = await res.json();
     applyState(d.state, d.duration_seconds || 0);
-  } catch (_) {}
+  } catch (_) { }
 
   await loadDisplays();
   await loadFiles();
+  await loadAudioDevices();
+  startAutoRefresh();
 })();
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: KEYBOARD SHORTCUTS
+// ══════════════════════════════════════════════════════════════════════
+document.addEventListener("keydown", (e) => {
+  // Ctrl+Shift+R → toggle recording (browser shortcut)
+  if (e.ctrlKey && e.shiftKey && e.key === "R") {
+    e.preventDefault();
+    if (state.appState === "idle") startRecording();
+    else if (state.appState === "recording") stopRecording();
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: AUDIO DEVICE SELECTION
+// ══════════════════════════════════════════════════════════════════════
+async function loadAudioDevices() {
+  const sel = document.getElementById("mic-device-select");
+  if (!sel) return;
+  try {
+    const res = await fetch("/api/audio-devices");
+    const data = await res.json();
+    sel.innerHTML = '<option value="">— Mặc định —</option>';
+    for (const d of (data.devices || [])) {
+      if (d.is_input) {
+        const opt = document.createElement("option");
+        opt.value = d.index;
+        opt.textContent = d.name;
+        sel.appendChild(opt);
+      }
+    }
+    // Restore saved selection
+    const cfgRes = await fetch("/api/config");
+    const cfg = await cfgRes.json();
+    if (cfg.mic_device_index != null) sel.value = cfg.mic_device_index;
+  } catch (_) { }
+}
+
+const micDevSel = document.getElementById("mic-device-select");
+if (micDevSel) {
+  micDevSel.addEventListener("change", (e) => {
+    const val = e.target.value === "" ? null : parseInt(e.target.value);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mic_device_index: val }),
+    }).catch(() => { });
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// P3: SCHEDULE RECORDING
+// ══════════════════════════════════════════════════════════════════════
+let _scheduleCountdown = null;
+
+const btnScheduleStart = document.getElementById("btn-schedule-start");
+const btnScheduleStop = document.getElementById("btn-schedule-stop");
+const btnScheduleCancel = document.getElementById("btn-schedule-cancel");
+const scheduleStatus = document.getElementById("schedule-status");
+
+if (btnScheduleStart) {
+  btnScheduleStart.addEventListener("click", async () => {
+    const mins = parseInt(document.getElementById("schedule-delay").value) || 0;
+    if (mins <= 0) { alert("Nhập số phút > 0"); return; }
+    try {
+      await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start_after", delay_seconds: mins * 60 }),
+      });
+    } catch (err) { alert("Lỗi: " + err.message); }
+  });
+}
+
+if (btnScheduleStop) {
+  btnScheduleStop.addEventListener("click", async () => {
+    const mins = parseInt(document.getElementById("schedule-delay").value) || 0;
+    if (mins <= 0) { alert("Nhập số phút > 0"); return; }
+    try {
+      await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stop_after", delay_seconds: mins * 60 }),
+      });
+    } catch (err) { alert("Lỗi: " + err.message); }
+  });
+}
+
+if (btnScheduleCancel) {
+  btnScheduleCancel.addEventListener("click", async () => {
+    try {
+      await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+      if (scheduleStatus) scheduleStatus.textContent = "";
+      if (_scheduleCountdown) { clearInterval(_scheduleCountdown); _scheduleCountdown = null; }
+    } catch (err) { alert("Lỗi: " + err.message); }
+  });
+}
+
+socket.on("schedule_event", (data) => {
+  if (_scheduleCountdown) { clearInterval(_scheduleCountdown); _scheduleCountdown = null; }
+  if (!scheduleStatus) return;
+
+  if (data.type === "scheduled_start" || data.type === "scheduled_stop") {
+    let remaining = data.delay;
+    const label = data.type === "scheduled_start" ? "Ghi sau" : "Dừng sau";
+    scheduleStatus.textContent = `⏱ ${label}: ${Math.ceil(remaining / 60)} phút`;
+    _scheduleCountdown = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(_scheduleCountdown);
+        _scheduleCountdown = null;
+        scheduleStatus.textContent = "";
+      } else {
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        scheduleStatus.textContent = `⏱ ${label}: ${m}:${String(s).padStart(2, "0")}`;
+      }
+    }, 1000);
+  } else if (data.type === "auto_stop") {
+    stopRecording();
+    scheduleStatus.textContent = "✅ Dừng tự động theo lịch.";
+    setTimeout(() => { if (scheduleStatus) scheduleStatus.textContent = ""; }, 3000);
+  } else if (data.type === "started") {
+    scheduleStatus.textContent = "✅ Đã bắt đầu ghi theo lịch.";
+    setTimeout(() => { if (scheduleStatus) scheduleStatus.textContent = ""; }, 3000);
+  } else if (data.type === "cancelled") {
+    scheduleStatus.textContent = "";
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// AUTO-REFRESH: Display previews & Window list
+// ══════════════════════════════════════════════════════════════════════
+const AUTO_REFRESH_DISPLAY_MS = 30_000;  // 30s: làm mới preview màn hình
+const AUTO_REFRESH_WINDOW_MS  = 15_000;  // 15s: làm mới danh sách cửa sổ
+
+let _autoRefreshDisplayTimer = null;
+let _autoRefreshWindowTimer  = null;
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+
+  // Refresh display previews mỗi 30s khi idle + đang ở tab màn hình
+  _autoRefreshDisplayTimer = setInterval(() => {
+    if (state.appState === "idle" && state.captureMode === "display") {
+      refreshPreviews();
+    }
+  }, AUTO_REFRESH_DISPLAY_MS);
+
+  // Refresh danh sách cửa sổ mỗi 15s khi idle + đang ở tab cửa sổ
+  // silentRefresh=true: giữ nguyên preview cửa sổ đang chọn, chỉ cập nhật danh sách
+  _autoRefreshWindowTimer = setInterval(() => {
+    if (state.appState === "idle" && state.captureMode === "window") {
+      loadWindows(true);
+    }
+  }, AUTO_REFRESH_WINDOW_MS);
+}
+
+function stopAutoRefresh() {
+  if (_autoRefreshDisplayTimer) { clearInterval(_autoRefreshDisplayTimer); _autoRefreshDisplayTimer = null; }
+  if (_autoRefreshWindowTimer)  { clearInterval(_autoRefreshWindowTimer);  _autoRefreshWindowTimer  = null; }
+}

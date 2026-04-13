@@ -12,9 +12,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-THUMB_W = 320
-THUMB_H = 180
-JPEG_QUALITY = 60
+THUMB_W = 640
+THUMB_H = 360
+JPEG_QUALITY = 85
 
 
 @dataclass

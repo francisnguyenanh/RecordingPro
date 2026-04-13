@@ -36,11 +36,13 @@ DEFAULT_CONFIG: dict = {
     "auto_detect_calls": False,
     "auto_record_delay_seconds": 5,
     "auto_stop_on_call_end": True,
-    "merge_audio_default": True,
-    "convert_mp3_default": True,
+    "record_mode_default": "mp4_mp3",
     "mic_gain": 1,
     "speaker_gain": 1,
     "output_dir": None,
+    "mic_device_index": None,
+    "global_hotkey_enabled": True,
+    "schedule_delay_minutes": 0,
 }
 
 # ══════════════════════════════════════════════════════════════════════
@@ -75,6 +77,9 @@ current_session: Optional[object] = None
 app_state: Literal["idle", "recording", "processing"] = "idle"
 _recording_start_time: float = 0.0
 popup_pending: bool = False    # Đang hiển thị modal hỏi người dùng
+_last_detected_app: Optional[str] = None  # P3: Tên app vừa detect được
+_schedule_timer: Optional[threading.Timer] = None
+_schedule_lock = threading.Lock()
 
 # ── CallDetector & DisplayManager singletons ─────────────────────────
 from recorder.call_detector import CallDetector
@@ -89,12 +94,13 @@ _detector: Optional[CallDetector] = None
 # ══════════════════════════════════════════════════════════════════════
 
 def _on_call_start(app_name: str) -> None:
-    global popup_pending
+    global popup_pending, _last_detected_app
     with _state_lock:
         if popup_pending:
             logger.debug("[Detector] Popup đang mở, bỏ qua sự kiện trùng lặp.")
             return
         popup_pending = True
+        _last_detected_app = app_name
     logger.info("[Detector] Phát hiện cuộc gọi: %s → emit call_detected", app_name)
     socketio.emit("call_detected", {"app_name": app_name})
 
@@ -153,8 +159,30 @@ def api_start():
         data = request.get_json(silent=True) or {}
         display_index = int(data.get("display_index", 1))
 
+        cfg = load_config()
+        mic_device = cfg.get("mic_device_index")
+
+        # Window region capture (optional)
+        window_region = None
+        if data.get("window_region"):
+            wr = data["window_region"]
+            try:
+                window_region = {
+                    "left":   int(wr["left"]),
+                    "top":    int(wr["top"]),
+                    "width":  int(wr["width"]),
+                    "height": int(wr["height"]),
+                    "title":  str(wr.get("title", "")),
+                    "hwnd":   int(wr["hwnd"]) if wr.get("hwnd") else None,
+                }
+                if window_region["width"] <= 0 or window_region["height"] <= 0:
+                    window_region = None
+            except (KeyError, ValueError, TypeError):
+                window_region = None
+
         from recorder.session import RecordingSession
-        session = RecordingSession(display_index=display_index)
+        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR,
+                                   mic_device=mic_device, window_region=window_region)
         try:
             session.start()
         except Exception as exc:
@@ -191,13 +219,16 @@ def api_stop():
     def _do_stop():
         global current_session, app_state
         try:
-            # Tính tổng số steps dựa trên config
-            total_steps = 2  # Dừng video + Dừng audio
-            if merge_audio:
-                total_steps += 1  # Ghép audio
+            # Tính tổng số steps: 
+            # 1: Dừng video
+            # 2: Dừng audio
+            # 3: Bắt đầu hậu xử lý / Đợi xử lý phân đoạn
+            # 4: Nối phân đoạn (Concat)
+            # (+1 nếu convert_mp3): Xuất MP3
+            total_steps = 4
             if convert_mp3:
-                total_steps += 1  # Chuyển MP3
-            total_steps += 1  # Hậu xử lý
+                total_steps += 1
+            total_steps += 1  # Step 5/6: Hoàn tất
             
             current_step = 0
             
@@ -269,6 +300,12 @@ def api_status():
 
 @app.route("/api/files", methods=["GET"])
 def api_files():
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = min(max(int(request.args.get("per_page", 50)), 1), 200)
+    except (ValueError, TypeError):
+        page, per_page = 1, 50
+
     files = []
     for p in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.suffix.lower() not in (".mp4", ".mp3", ".wav"):
@@ -283,12 +320,24 @@ def api_files():
             "created_at": int(stat.st_mtime),
             "download_url": f"/api/download/{p.name}",
         })
-    return jsonify(files)
+
+    total = len(files)
+    start = (page - 1) * per_page
+    return jsonify({
+        "files": files[start : start + per_page],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    })
 
 
 @app.route("/api/download/<name>", methods=["GET"])
 def api_download(name: str):
     path = OUTPUT_DIR / name
+    try:
+        path.resolve().relative_to(OUTPUT_DIR.resolve())
+    except ValueError:
+        return jsonify({"error": "Đường dẫn không hợp lệ."}), 400
     if not path.exists() or not path.is_file():
         return jsonify({"error": "File không tồn tại."}), 404
     return send_file(str(path), as_attachment=True)
@@ -504,6 +553,31 @@ def api_switch_display():
     return jsonify({"ok": True, "display_index": new_index})
 
 
+@app.route("/api/switch-window", methods=["POST"])
+def api_switch_window():
+    """Chuyển sang ghi cửa sổ khác ngay khi đang recording."""
+    global current_session
+    with _state_lock:
+        if app_state != "recording" or current_session is None:
+            return jsonify({"ok": False, "error": "Không có phiên đang ghi."}), 409
+        data = request.get_json(silent=True) or {}
+        wr = data.get("window_region", {})
+        try:
+            region = {
+                "left":   int(wr["left"]),
+                "top":    int(wr["top"]),
+                "width":  int(wr["width"]),
+                "height": int(wr["height"]),
+                "title":  str(wr.get("title", "")),
+                "hwnd":   int(wr["hwnd"]) if wr.get("hwnd") else None,
+            }
+        except (KeyError, ValueError, TypeError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        current_session.switch_window(region)
+    socketio.emit("window_switched", {"title": region.get("title", "")})
+    return jsonify({"ok": True, "title": region.get("title", "")})
+
+
 @app.route("/api/simulate/call-start", methods=["POST"])
 def api_simulate_call_start():
     """
@@ -568,9 +642,8 @@ def on_confirm_record():
     cfg = load_config()
     display_index = int(cfg.get("default_display_index", 1))
 
-    # Trigger start recording via internal call
-    from recorder.session import RecordingSession
-    _start_session(display_index=display_index)
+    # P3: truyền tên app detected cho auto-naming
+    _start_session(display_index=display_index, detected_app=_last_detected_app)
 
 
 @socketio.on("dismiss_call_popup")
@@ -582,16 +655,363 @@ def on_dismiss_call_popup():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ROUTES — Audio Devices (P3)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/audio-devices", methods=["GET"])
+def api_audio_devices():
+    """Liệt kê thiết bị âm thanh để user chọn mic/speaker."""
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        result = []
+        for i, d in enumerate(devices):
+            result.append({
+                "index": i,
+                "name": d["name"],
+                "max_input_channels": d["max_input_channels"],
+                "max_output_channels": d["max_output_channels"],
+                "default_samplerate": d["default_samplerate"],
+                "is_input": d["max_input_channels"] > 0,
+                "is_output": d["max_output_channels"] > 0,
+            })
+        di, do = sd.default.device
+        return jsonify({"devices": result, "default_input": di, "default_output": do})
+    except Exception as exc:
+        logger.warning("[AudioDevices] %s", exc)
+        return jsonify({"devices": [], "error": str(exc)})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Windows List (P3 — region capture)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/windows", methods=["GET"])
+def api_windows():
+    """Liệt kê tất cả cửa sổ hiện đang mở để chọn ghi.
+    Dùng ctypes.EnumWindows để đảm bảo lấy được Teams, Explorer, Notepad, v.v.
+    """
+    import sys
+    if sys.platform != "win32":
+        # fallback for non-Windows
+        try:
+            import pygetwindow as gw
+            return jsonify([
+                {"title": w.title, "left": w.left, "top": w.top,
+                 "width": w.width, "height": w.height}
+                for w in gw.getAllWindows()
+                if w.title and w.width > 100 and w.height > 100
+            ])
+        except Exception as exc:
+            logger.warning("[Windows] %s", exc)
+            return jsonify([])
+
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+
+    _WS_EX_TOOLWINDOW = 0x00000080
+    _WS_EX_APPWINDOW  = 0x00040000
+    _DWMWA_CLOAKED    = 14
+
+    try:
+        dwmapi = ctypes.windll.dwmapi
+    except Exception:
+        dwmapi = None
+
+    class _WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [
+            ("length",            ctypes.c_uint),
+            ("flags",             ctypes.c_uint),
+            ("showCmd",           ctypes.c_uint),
+            ("ptMinPosition",     ctypes.wintypes.POINT),
+            ("ptMaxPosition",     ctypes.wintypes.POINT),
+            ("rcNormalPosition",  ctypes.wintypes.RECT),
+        ]
+
+    buf = ctypes.create_unicode_buffer(512)
+    windows = []
+
+    def _enum_cb(hwnd, _lp):
+        # Chỉ lấy cửa sổ thực sự hiển thị
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        # Bỏ qua cửa sổ không có tiêu đề
+        user32.GetWindowTextW(hwnd, buf, 512)
+        title = buf.value.strip()
+        if not title:
+            return True
+        # Bỏ qua tool windows (tooltip, tray popup) — nhưng giữ lại những cái có WS_EX_APPWINDOW
+        ex_style = user32.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+        if (ex_style & _WS_EX_TOOLWINDOW) and not (ex_style & _WS_EX_APPWINDOW):
+            return True
+        # Bỏ qua cửa sổ bị ẩn bởi virtual desktop (cloaked)
+        if dwmapi:
+            try:
+                cloaked = ctypes.c_int(0)
+                dwmapi.DwmGetWindowAttribute(hwnd, _DWMWA_CLOAKED,
+                                             ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+                if cloaked.value:
+                    return True
+            except Exception:
+                pass
+        # Lấy kích thước cửa sổ
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w = rect.right  - rect.left
+        h = rect.bottom - rect.top
+        left, top = rect.left, rect.top
+        # Nếu cửa sổ đang thu nhỏ (minimized), lấy kích thước thực từ WindowPlacement
+        if user32.IsIconic(hwnd):
+            wp = _WINDOWPLACEMENT()
+            wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+            if user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+                w = wp.rcNormalPosition.right  - wp.rcNormalPosition.left
+                h = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top
+                left = wp.rcNormalPosition.left
+                top  = wp.rcNormalPosition.top
+        if w < 50 or h < 50:
+            return True
+        windows.append({
+            "hwnd":  hwnd,
+            "title": title,
+            "left":  left,
+            "top":   top,
+            "width": w,
+            "height": h,
+        })
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+    # Sắp xếp theo tiêu đề
+    windows.sort(key=lambda x: x["title"].lower())
+    return jsonify(windows)
+
+
+@app.route("/api/windows/preview", methods=["POST"])
+def api_window_preview():
+    """Trả về ảnh preview (base64 JPEG) của cửa sổ được chọn.
+    Body: {hwnd?: int, title?: str, width: int, height: int}
+    """
+    import sys
+    if sys.platform != "win32":
+        return jsonify({"ok": False, "error": "Windows only"}), 400
+
+    data = request.get_json(silent=True) or {}
+    hwnd  = data.get("hwnd")
+    title = str(data.get("title", ""))
+    req_w = int(data.get("width",  0))
+    req_h = int(data.get("height", 0))
+
+    logger.info("[WindowPreview] Request: hwnd=%s title=%r req_w=%d req_h=%d", hwnd, title, req_w, req_h)
+
+    import ctypes, ctypes.wintypes
+    user32 = ctypes.windll.user32
+
+    # Xác định HWND
+    if not hwnd and title:
+        buf = ctypes.create_unicode_buffer(512)
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        found = []
+        def _cb(h, _):
+            user32.GetWindowTextW(h, buf, 512)
+            if title.lower() in buf.value.lower() and user32.IsWindowVisible(h):
+                found.append(h)
+            return True
+        user32.EnumWindows(WNDENUMPROC(_cb), 0)
+        hwnd = found[0] if found else None
+        logger.info("[WindowPreview] HWND lookup by title=%r → found=%s", title, hwnd)
+
+    if not hwnd:
+        logger.warning("[WindowPreview] Không tìm thấy HWND cho title=%r", title)
+        return jsonify({"ok": False, "error": "Không tìm thấy cửa sổ"}), 404
+
+    rect = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    logger.info("[WindowPreview] hwnd=%s rect=(%d,%d,%d,%d)",
+                hwnd, rect.left, rect.top, rect.right, rect.bottom)
+
+    # ── Xử lý cửa sổ đang minimize ───────────────────────────────────
+    # Khi minimize, Windows di chuyển cửa sổ ra (-32000,-32000) và DWM
+    # ngừng composite nó → mọi phương pháp capture đều trả về đen.
+    # Giải pháp: MAXIMIZE cửa sổ (không chỉ restore) để DWM render đầy đủ.
+    # Cửa sổ sẽ được giữ ở trạng thái maximize → record cũng hoạt động tốt.
+    SW_SHOWMAXIMIZED = 3
+    is_minimized = bool(user32.IsIconic(hwnd))
+    logger.info("[WindowPreview] is_minimized=%s", is_minimized)
+
+    try:
+        if is_minimized:
+            logger.info("[WindowPreview] Maximize cửa sổ về cuối Z-order (không cướp focus)")
+            HWND_BOTTOM  = 1
+            SWP_NOMOVE   = 0x0002
+            SWP_NOSIZE   = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
+            # Đẩy xuống dưới cùng Z-order ngay sau khi maximize
+            # → cửa sổ mở ra nhưng không che / không cướp focus
+            user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            time.sleep(0.35)  # chờ DWM paint và window animation xong
+
+        # Đọc rect thực tế sau khi maximize / không thay đổi
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        logger.info("[WindowPreview] Rect: (%d,%d,%d,%d)",
+                    rect.left, rect.top, rect.right, rect.bottom)
+
+        real_w = max(rect.right  - rect.left, 1)
+        real_h = max(rect.bottom - rect.top,  1)
+
+        # Luôn dùng kích thước thực (physical pixels) để capture
+        cap_w, cap_h = real_w, real_h
+
+        # Giới hạn kích thước preview hiển thị
+        MAX_DIM = 640
+        scale = min(MAX_DIM / cap_w, MAX_DIM / cap_h, 1.0)
+        pw = max(int(cap_w * scale), 2)
+        ph = max(int(cap_h * scale), 2)
+        pw = pw if pw % 2 == 0 else pw + 1
+        ph = ph if ph % 2 == 0 else ph + 1
+        logger.info("[WindowPreview] cap=%dx%d → preview=%dx%d (scale=%.3f)", cap_w, cap_h, pw, ph, scale)
+
+        from recorder.video_engine import VideoEngine
+        import cv2, base64, numpy as np
+
+        frame_full = None
+
+        # ── Bước 1: _grab_hwnd_bgr (PW_RENDERFULLCONTENT → PrintWindow → BitBlt) ──
+        logger.info("[WindowPreview] Bước 1: grab_hwnd hwnd=%s cap=%dx%d", hwnd, cap_w, cap_h)
+        try:
+            frame_pw = VideoEngine._grab_hwnd_bgr(hwnd, cap_w, cap_h)
+            if frame_pw is not None:
+                pw_mean = float(frame_pw.mean())
+                logger.info("[WindowPreview] grab_hwnd mean=%.2f", pw_mean)
+                if pw_mean > 2.0:
+                    frame_full = frame_pw
+                else:
+                    logger.warning("[WindowPreview] grab_hwnd trả về ảnh đen (mean=%.2f)", pw_mean)
+            else:
+                logger.warning("[WindowPreview] grab_hwnd trả về None")
+        except Exception as pw_exc:
+            logger.warning("[WindowPreview] grab_hwnd exception: %s", pw_exc)
+
+        # ── Bước 2: mss screen grab (absolute fallback) ──────────────────────────
+        if frame_full is None:
+            try:
+                import mss as _mss
+                mon = {"left": rect.left, "top": rect.top, "width": real_w, "height": real_h}
+                logger.info("[WindowPreview] Bước 2: mss grab fallback: %s", mon)
+                with _mss.mss() as sct:
+                    shot = sct.grab(mon)
+                arr = np.array(shot, dtype=np.uint8)
+                frame_mss = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+                mss_mean = float(frame_mss.mean())
+                logger.info("[WindowPreview] mss mean=%.2f shape=%s", mss_mean, frame_mss.shape)
+                if mss_mean > 2.0:
+                    frame_full = frame_mss
+                else:
+                    logger.warning("[WindowPreview] mss cũng trả về ảnh đen (mean=%.2f)", mss_mean)
+            except Exception as mss_exc:
+                logger.warning("[WindowPreview] mss exception: %s", mss_exc)
+
+        if frame_full is None:
+            logger.error("[WindowPreview] Tất cả phương pháp thất bại cho hwnd=%s title=%r", hwnd, title)
+            return jsonify({"ok": False, "error": "Không capture được nội dung cửa sổ"}), 500
+
+        frame_small = cv2.resize(frame_full, (pw, ph))
+        _, buf_enc = cv2.imencode(".jpg", frame_small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        b64 = base64.b64encode(buf_enc.tobytes()).decode()
+        logger.info("[WindowPreview] Thành công: jpeg %d bytes (was_minimized=%s)", len(buf_enc), is_minimized)
+        return jsonify({
+            "ok": True,
+            "preview_b64": b64,
+            "width": real_w,
+            "height": real_h,
+            "was_maximized": is_minimized,   # JS dùng để hiện thông báo
+        })
+
+    except Exception as exc:
+        logger.error("[WindowPreview] Lỗi không xử lý được: %s", exc, exc_info=True)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    # Không re-minimize — cửa sổ ở lại maximize để record hoạt động
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ROUTES — Schedule (P3)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/schedule", methods=["POST"])
+def api_schedule():
+    """Hẹn giờ bắt đầu hoặc dừng ghi."""
+    global _schedule_timer
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")  # "start_after" | "stop_after" | "cancel"
+    delay_seconds = int(data.get("delay_seconds", 0))
+
+    if action == "cancel":
+        with _schedule_lock:
+            if _schedule_timer:
+                _schedule_timer.cancel()
+                _schedule_timer = None
+        socketio.emit("schedule_event", {"type": "cancelled"})
+        return jsonify({"ok": True, "message": "Đã hủy hẹn giờ."})
+
+    if action == "start_after" and delay_seconds > 0:
+        def _scheduled_start():
+            global _schedule_timer
+            cfg = load_config()
+            _start_session(display_index=cfg.get("default_display_index", 1))
+            with _schedule_lock:
+                _schedule_timer = None
+            socketio.emit("schedule_event", {"type": "started"})
+
+        with _schedule_lock:
+            if _schedule_timer:
+                _schedule_timer.cancel()
+            _schedule_timer = threading.Timer(delay_seconds, _scheduled_start)
+            _schedule_timer.daemon = True
+            _schedule_timer.start()
+        socketio.emit("schedule_event", {"type": "scheduled_start", "delay": delay_seconds})
+        return jsonify({"ok": True, "message": f"Hẹn ghi sau {delay_seconds}s"})
+
+    if action == "stop_after" and delay_seconds > 0:
+        def _scheduled_stop():
+            global _schedule_timer
+            with _schedule_lock:
+                _schedule_timer = None
+            # Emit signal to trigger stop from client side
+            socketio.emit("schedule_event", {"type": "auto_stop"})
+
+        with _schedule_lock:
+            if _schedule_timer:
+                _schedule_timer.cancel()
+            _schedule_timer = threading.Timer(delay_seconds, _scheduled_stop)
+            _schedule_timer.daemon = True
+            _schedule_timer.start()
+        socketio.emit("schedule_event", {"type": "scheduled_stop", "delay": delay_seconds})
+        return jsonify({"ok": True, "message": f"Hẹn dừng sau {delay_seconds}s"})
+
+    return jsonify({"ok": False, "error": "Action không hợp lệ."}), 400
+
+
+# ══════════════════════════════════════════════════════════════════════
 # INTERNAL HELPERS
 # ══════════════════════════════════════════════════════════════════════
 
-def _start_session(display_index: int = 1) -> None:
+def _start_session(display_index: int = 1, detected_app: str = None,
+                   window_region: dict = None) -> None:
     global current_session, app_state, _recording_start_time
     with _state_lock:
         if app_state != "idle":
             return
+        cfg = load_config()
+        mic_device = cfg.get("mic_device_index")
         from recorder.session import RecordingSession
-        session = RecordingSession(display_index=display_index)
+        session = RecordingSession(display_index=display_index, output_dir=OUTPUT_DIR,
+                                   detected_app=detected_app, mic_device=mic_device,
+                                   window_region=window_region)
         try:
             session.start()
         except Exception as exc:
@@ -629,9 +1049,9 @@ def _level_emitter() -> None:
         spk_lv = getattr(getattr(session, "audio", None), "speaker_level", 0.0)
         socketio.emit("level_update", {"mic": round(mic_lv, 3), "speaker": round(spk_lv, 3)})
         tick += 1
-        if tick % 100 == 0:  # mỗi 10 giây (100 × 0.1s) đồng bộ lại thời gian
+        if tick % 50 == 0:  # mỗi 10 giây (50 × 0.2s) đồng bộ lại thời gian
             _emit_status()
-        socketio.sleep(0.1)
+        socketio.sleep(0.2)
     socketio.emit("level_update", {"mic": 0.0, "speaker": 0.0})
 
 
@@ -650,5 +1070,5 @@ def _on_startup() -> None:
 if __name__ == "__main__":
     _on_startup()
     logger.info("ScreenCapturePro v2 đang khởi động tại http://127.0.0.1:5010")
-    #socketio.run(app, host="127.0.0.1", port=5011, debug=True)
-    socketio.run(app, host="127.0.0.1", port=5010, debug=True)
+    #socketio.run(app, host="127.0.0.1", port=5004)
+    socketio.run(app, host="127.0.0.1", port=5011, debug=True)

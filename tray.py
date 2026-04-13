@@ -4,6 +4,7 @@ Run: python tray.py  (or pythonw tray.py for no console)
 
 Starts Flask server + CallDetector in background threads,
 then creates a System Tray icon (pystray) for 24/7 operation.
+P3: Global hotkey (Ctrl+Alt+R) + Windows notification on recording done.
 """
 import json
 import sys
@@ -17,6 +18,14 @@ from PIL import Image, ImageDraw
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
+
+# P3: Global hotkey support (optional)
+_hotkey_listener = None
+try:
+    from pynput import keyboard as pynput_kb
+    _HAS_PYNPUT = True
+except ImportError:
+    _HAS_PYNPUT = False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -96,10 +105,42 @@ class TrayApp:
         self.icon: pystray.Icon | None = None
         self.flask_thread: threading.Thread | None = None
         self._browser_opened = False
+        self._hotkey_listener = None
+        self._sio_thread = None
 
     # ── Public actions ─────────────────────────────────────────────
     def open_browser(self) -> None:
         webbrowser.open("http://127.0.0.1:5010")
+
+    def toggle_recording(self) -> None:
+        """Toggle recording via hotkey (Ctrl+Alt+R)."""
+        import requests
+        try:
+            r = requests.get("http://127.0.0.1:5010/api/status", timeout=2)
+            data = r.json()
+            if data.get("state") == "idle":
+                requests.post("http://127.0.0.1:5010/api/start",
+                              json={"display_index": self._read_config().get("default_display_index", 1)},
+                              timeout=3)
+                self._notify("Bắt đầu ghi màn hình", "Nhấn Ctrl+Alt+R để dừng.")
+            elif data.get("state") == "recording":
+                cfg = self._read_config()
+                requests.post("http://127.0.0.1:5010/api/stop",
+                              json={"merge_audio": True, "convert_mp3": True,
+                                    "mic_gain": cfg.get("mic_gain", 1),
+                                    "speaker_gain": cfg.get("speaker_gain", 1)},
+                              timeout=3)
+                self._notify("Dừng ghi", "Đang xử lý file…")
+        except Exception as exc:
+            print(f"[Hotkey] Lỗi: {exc}")
+
+    def _notify(self, title: str, message: str) -> None:
+        """Gửi Windows notification qua pystray balloon."""
+        if self.icon:
+            try:
+                self.icon.notify(message, title)
+            except Exception:
+                pass
 
     def toggle_autodetect(self, icon, item) -> None:
         """Toggle auto_detect_calls in config and notify Flask server."""
@@ -145,6 +186,7 @@ class TrayApp:
             pystray.MenuItem(state_label, lambda i, item: None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("🌐 Mở giao diện", lambda i, item: self.open_browser()),
+            pystray.MenuItem("⏺ Ghi / Dừng (Ctrl+Alt+R)", lambda i, item: self.toggle_recording()),
             pystray.MenuItem(auto_label, self.toggle_autodetect),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("❌ Thoát", lambda i, item: self.quit()),
@@ -196,10 +238,53 @@ class TrayApp:
             print("[Tray] Flask không khởi động được trong 10s — thoát.")
             sys.exit(1)
 
-        # 3. Open browser on first launch
+        # 3. P3: Start global hotkey listener (Ctrl+Alt+R)
+        if _HAS_PYNPUT:
+            cfg = self._read_config()
+            if cfg.get("global_hotkey_enabled", True):
+                try:
+                    self._hotkey_listener = pynput_kb.GlobalHotKeys({
+                        "<ctrl>+<alt>+r": self.toggle_recording,
+                    })
+                    self._hotkey_listener.daemon = True
+                    self._hotkey_listener.start()
+                    print("[Tray] Global hotkey Ctrl+Alt+R đã kích hoạt.")
+                except Exception as exc:
+                    print(f"[Tray] Không thể đăng ký hotkey: {exc}")
+
+        # 4. P3: SocketIO listener for notifications
+        def _listen_socketio():
+            try:
+                import socketio as sio_client
+                client = sio_client.Client()
+
+                @client.on("job_progress")
+                def on_job_progress(data):
+                    if data.get("stage") == "done":
+                        self._notify("Ghi xong!", data.get("message", "Xử lý hoàn tất."))
+
+                @client.on("schedule_event")
+                def on_schedule(data):
+                    if data.get("type") == "started":
+                        self._notify("Hẹn giờ", "Bắt đầu ghi theo lịch hẹn.")
+                    elif data.get("type") == "auto_stop":
+                        self.toggle_recording()  # Will stop if recording
+
+                client.connect("http://127.0.0.1:5010")
+                client.wait()
+            except ImportError:
+                # python-socketio[client] not installed — fall back to polling
+                pass
+            except Exception as exc:
+                print(f"[Tray] SocketIO client lỗi: {exc}")
+
+        self._sio_thread = threading.Thread(target=_listen_socketio, daemon=True, name="tray-sio")
+        self._sio_thread.start()
+
+        # 5. Open browser on first launch
         self.open_browser()
 
-        # 4. Create pystray icon with dynamic menu
+        # 6. Create pystray icon with dynamic menu
         self.icon = pystray.Icon(
             "ScreenCapturePro",
             create_tray_icon("idle_off"),
@@ -207,15 +292,27 @@ class TrayApp:
             menu=pystray.Menu(lambda: self._build_menu().items),
         )
 
-        # 5. Background thread: refresh icon every 3s
+        # 7. Background thread: refresh icon every 5s
         def _icon_updater():
+            import requests as _req
             while True:
-                time.sleep(3)
+                time.sleep(5)
                 self._refresh_icon()
+                try:
+                    r = _req.get("http://127.0.0.1:5010/api/status", timeout=1)
+                    data = r.json()
+                    if data.get("state") == "recording":
+                        secs = int(data.get("duration_seconds", 0))
+                        h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+                        self.icon.title = f"🔴 REC {h:02d}:{m:02d}:{s:02d} — Tomo Recording"
+                    else:
+                        self.icon.title = "Tomo Recording"
+                except Exception:
+                    pass
 
         threading.Thread(target=_icon_updater, daemon=True, name="tray-updater").start()
 
-        # 6. Run tray icon (blocks until quit)
+        # 8. Run tray icon (blocks until quit)
         self.icon.run()
 
 

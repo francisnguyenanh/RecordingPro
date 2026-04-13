@@ -9,7 +9,7 @@
 | Yêu cầu | Chi tiết |
 |---------|----------|
 | Python | 3.10 hoặc cao hơn |
-| FFmpeg | Phải có trong `PATH` |
+| FFmpeg | Bundled trong `bin\` — **không cần cài thủ công** |
 | OS | Windows 10/11 (khuyên dùng để phát hiện cuộc gọi tốt nhất) |
 
 > **Lưu ý:** Tính năng phát hiện cuộc gọi Method C (WinRT) chỉ hoạt động trên Windows 10/11.
@@ -18,11 +18,26 @@
 
 ## 2. Cài đặt
 
-1. **Cài đặt FFmpeg**: Đảm bảo `ffmpeg` đã được thêm vào biến môi trường `PATH`.
-2. **Cài đặt thư viện**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Lần đầu (developer / người setup)
+1. Chạy `download_ffmpeg.bat` — tải FFmpeg vào `bin\` (~70MB, chỉ cần 1 lần)
+2. Chạy `SETUP.bat` — tạo `.venv` và cài thư viện Python
+
+### Lần đầu (đồng nghiệp nhận file zip)
+> Nếu nhận zip đã có sẵn `bin\ffmpeg.exe` và `.venv`:
+1. Giải nén zip
+2. Chạy `RUN.bat` — xong
+
+> Nếu nhận zip chưa có `.venv`:
+1. Giải nén zip
+2. Chạy `SETUP.bat` (tự cài Python nếu chưa có, không cần cài FFmpeg)
+3. Chạy `RUN.bat`
+
+### Yêu cầu hệ thống
+| Yêu cầu | Chi tiết |
+|---------|----------|
+| Python  | 3.10+ (SETUP.bat tự cài nếu chưa có) |
+| FFmpeg  | Bundled trong `bin\` (download_ffmpeg.bat) — **không cần cài thủ công** |
+| OS      | Windows 10/11 |
 
 ---
 

@@ -10,6 +10,7 @@ A call is confirmed when ≥2/3 methods agree (majority vote).
 Google Meet (browser-based): only A+B available; both must agree.
 Includes simulate_call_start / simulate_call_end for UI testing.
 """
+import asyncio
 import logging
 import threading
 import time
@@ -73,6 +74,7 @@ class CallDetector:
         self._thread: Optional[threading.Thread] = None
         self.poll_interval: float = 3.0
         self._last_result: Optional[DetectionResult] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None  # Cached event loop
 
     # ── Method A: Process + Window Title ─────────────────────────────
     def _method_a(self) -> Optional[str]:
@@ -141,7 +143,6 @@ class CallDetector:
         Gracefully returns None if winsdk is unavailable.
         """
         try:
-            import asyncio
             from winsdk.windows.media.control import (  # type: ignore
                 GlobalSystemMediaTransportControlsSessionManager as MediaManager,
             )
@@ -156,7 +157,13 @@ class CallDetector:
                         pass
                 return app_ids
 
-            app_ids = asyncio.run(_get_app_ids())
+            # Reuse cached loop to avoid overhead of creating a new one every poll
+            if self._loop is None or self._loop.is_closed():
+                self._loop = asyncio.new_event_loop()
+            try:
+                app_ids = self._loop.run_until_complete(_get_app_ids())
+            except RuntimeError:
+                return None
 
             WINRT_MAP = {
                 "zoom":    "Zoom",
@@ -228,6 +235,8 @@ class CallDetector:
     def stop_monitoring(self) -> None:
         with self._lock:
             self._monitoring = False
+        if self._loop and not self._loop.is_closed():
+            self._loop.close()
         logger.info("[CallDetector] Đã dừng giám sát.")
 
     def _poll_loop(self) -> None:
