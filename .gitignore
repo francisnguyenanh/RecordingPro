@@ -1,16 +1,14 @@
-/.venv
-/__pycache__
+# Môi trường ảo
+.venv/
+env/
+venv/
 
-# FFmpeg bundled binary — chạy download_ffmpeg.bat để tạo lại
-bin/ffmpeg.exe
-bin/ffmpeg
+# Python rác
 **/__pycache__/
 *.pyc
-recorder/__pycache__/
-recorder/__pycache__/
-recorder/__pycache__/__init__.cpython-313.pyc
-recorder/__pycache__/__init__.cpython-313.pyc
-recorder/__pycache__/audio_engine.cpython-313.pyc
-recorder/__pycache__/session.cpython-313.pyc
-recorder/__pycache__/__init__.cpython-313.pyc
-recorder/__pycache__/__init__.cpython-313.pyc
+*.pyo
+*.pyd
+
+# Binaries
+bin/ffmpeg.exe
+bin/ffmpeg
