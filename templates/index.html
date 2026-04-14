@@ -767,6 +767,18 @@
     <div id="silence-timer-bar" class="h-0.5 mt-2.5 w-full" style="background:#1a1a1a;"></div>
   </div>
 
+  <!-- ══ TOAST: Cảnh báo audio ════════════════════════════════════ -->
+  <div id="audio-warn-toast"
+    class="toast hidden fixed top-5 right-5 rounded px-4 py-3 font-mono text-[0.82rem] min-w-[300px] max-w-[360px] z-[1000]"
+    style="background:rgba(200,60,40,0.95); border:1px solid #e04030; color:#fff; box-shadow:0 0 16px rgba(200,60,40,0.4);">
+    <span class="font-bold block mb-1">⚠ Cảnh báo audio</span>
+    <span id="audio-warn-msg" class="block mb-3 text-[0.8rem] opacity-90"></span>
+    <button id="audio-warn-dismiss"
+      class="bg-white/20 text-white border border-white/30 rounded-sm px-3 py-1 font-mono text-[0.78rem] cursor-pointer hover:bg-white/30 transition-colors">
+      Đã hiểu
+    </button>
+  </div>
+
   <!-- ══ HEADER ══════════════════════════════════════════════════════ -->
   <header class="border-b border-border bg-bg2 px-6 py-3 z-[100]">
     <div class="header-inner max-w-[900px] mx-auto flex items-center justify-between gap-3">

@@ -291,6 +291,7 @@ async function startRecording() {
 async function stopRecording() {
   stopTitleUpdater();
   stopSilenceMonitoring();
+  if (_audioWarnToast) _audioWarnToast.classList.add("hidden");
   try {
     const body = {
       ...getRecordMode(),
@@ -598,6 +599,18 @@ socket.on("window_switched", ({ title }) => {
   if (state.appState === "recording" && title) {
     recDispLabel.textContent = `● Đang ghi: ${title}`;
   }
+});
+
+// ── Audio warning toast ───────────────────────────────────────────────
+const _audioWarnToast = document.getElementById("audio-warn-toast");
+const _audioWarnMsg   = document.getElementById("audio-warn-msg");
+document.getElementById("audio-warn-dismiss").addEventListener("click", () => {
+  _audioWarnToast.classList.add("hidden");
+});
+
+socket.on("audio_warning", ({ message }) => {
+  _audioWarnMsg.textContent = message;
+  _audioWarnToast.classList.remove("hidden");
 });
 
 // ══════════════════════════════════════════════════════════════════════
