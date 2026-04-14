@@ -10,6 +10,15 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+def _emit(event: str, data: dict) -> None:
+    try:
+        from app import socketio  # type: ignore
+        socketio.emit(event, data)
+    except Exception:
+        pass
+
+
 SAMPLE_RATE = 44100
 CHANNELS = 2
 BLOCKSIZE = 1024
@@ -174,6 +183,10 @@ class AudioEngine:
                     time.sleep(0.05)
         except Exception as exc:
             logger.error("[AudioEngine] Lỗi ghi mic: %s", exc)
+            _emit("audio_warning", {
+                "type": "mic_failed",
+                "message": f"Mic không hoạt động ({exc}). File MP3 sẽ không có tiếng mic.",
+            })
 
     # ------------------------------------------------------------------
     def _record_loopback(self) -> None:
@@ -185,6 +198,10 @@ class AudioEngine:
         logger.warning("[AudioEngine] Không tìm thấy thiết bị loopback — "
                        "audio của members trong call sẽ không được ghi. "
                        "Hãy cài PyAudioWPatch hoặc soundcard.")
+        _emit("audio_warning", {
+            "type": "no_speaker",
+            "message": "Không bắt được âm thanh hệ thống (loopback). File MP3 sẽ không có tiếng speaker.",
+        })
 
     def _try_wasapi_loopback(self) -> bool:
         try:

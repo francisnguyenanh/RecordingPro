@@ -4,7 +4,7 @@
   "auto_record_delay_seconds": 5,
   "auto_stop_on_call_end": true,
   "record_mode_default": "mp4_mp3",
-  "mic_gain": 1,
+  "mic_gain": 2,
   "speaker_gain": 1,
   "output_dir": null,
   "mic_device_index": null,
