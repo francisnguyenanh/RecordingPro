@@ -82,9 +82,19 @@ class AudioEngine:
             spk_data = self.speaker_frames
             self.speaker_frames = []
 
-            if mic_data and self._mic_wf is not None:
+            if mic_data and self._mic_wav_path is not None:
+                if self._mic_wf is None:
+                    self._mic_wf = wave.open(str(self._mic_wav_path), "wb")
+                    self._mic_wf.setnchannels(CHANNELS)
+                    self._mic_wf.setsampwidth(2)
+                    self._mic_wf.setframerate(SAMPLE_RATE)
                 self._mic_wf.writeframes(b"".join(mic_data))
-            if spk_data and self._spk_wf is not None:
+            if spk_data and self._spk_wav_path is not None:
+                if self._spk_wf is None:
+                    self._spk_wf = wave.open(str(self._spk_wav_path), "wb")
+                    self._spk_wf.setnchannels(self._speaker_ch)
+                    self._spk_wf.setsampwidth(2)
+                    self._spk_wf.setframerate(self._speaker_sr)
                 self._spk_wf.writeframes(b"".join(spk_data))
 
             old_mic = str(self._mic_wav_path) if self._mic_wav_path else None
