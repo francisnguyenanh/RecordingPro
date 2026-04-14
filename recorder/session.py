@@ -429,6 +429,8 @@ def _final_post_process(
         proc = subprocess.run(cmd_mp3, capture_output=True, **_POPEN_FLAGS)
         if proc.returncode == 0:
             result["audio_mp3"] = mp3_path
+        else:
+            logger.error("[PostProcess] MP3 export lỗi:\n%s", proc.stderr.decode(errors="replace"))
 
     # Nếu mp3_only (merge_audio=False) và có chuyển sang mp3 thành công/hoặc người dùng không muốn mp4
     if not merge_audio and result["merged"]:

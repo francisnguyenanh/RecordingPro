@@ -10,6 +10,15 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+def _emit(event: str, data: dict) -> None:
+    try:
+        from app import socketio  # type: ignore
+        socketio.emit(event, data)
+    except Exception:
+        pass
+
+
 SAMPLE_RATE = 44100
 CHANNELS = 2
 BLOCKSIZE = 1024
@@ -82,9 +91,19 @@ class AudioEngine:
             spk_data = self.speaker_frames
             self.speaker_frames = []
 
-            if mic_data and self._mic_wf is not None:
+            if mic_data and self._mic_wav_path is not None:
+                if self._mic_wf is None:
+                    self._mic_wf = wave.open(str(self._mic_wav_path), "wb")
+                    self._mic_wf.setnchannels(CHANNELS)
+                    self._mic_wf.setsampwidth(2)
+                    self._mic_wf.setframerate(SAMPLE_RATE)
                 self._mic_wf.writeframes(b"".join(mic_data))
-            if spk_data and self._spk_wf is not None:
+            if spk_data and self._spk_wav_path is not None:
+                if self._spk_wf is None:
+                    self._spk_wf = wave.open(str(self._spk_wav_path), "wb")
+                    self._spk_wf.setnchannels(self._speaker_ch)
+                    self._spk_wf.setsampwidth(2)
+                    self._spk_wf.setframerate(self._speaker_sr)
                 self._spk_wf.writeframes(b"".join(spk_data))
 
             old_mic = str(self._mic_wav_path) if self._mic_wav_path else None
@@ -164,6 +183,10 @@ class AudioEngine:
                     time.sleep(0.05)
         except Exception as exc:
             logger.error("[AudioEngine] Lỗi ghi mic: %s", exc)
+            _emit("audio_warning", {
+                "type": "mic_failed",
+                "message": f"Mic không hoạt động ({exc}). File MP3 sẽ không có tiếng mic.",
+            })
 
     # ------------------------------------------------------------------
     def _record_loopback(self) -> None:
@@ -175,6 +198,10 @@ class AudioEngine:
         logger.warning("[AudioEngine] Không tìm thấy thiết bị loopback — "
                        "audio của members trong call sẽ không được ghi. "
                        "Hãy cài PyAudioWPatch hoặc soundcard.")
+        _emit("audio_warning", {
+            "type": "no_speaker",
+            "message": "Không bắt được âm thanh hệ thống (loopback). File MP3 sẽ không có tiếng speaker.",
+        })
 
     def _try_wasapi_loopback(self) -> bool:
         try:
